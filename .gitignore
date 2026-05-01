@@ -1,0 +1,4 @@
+builds
+.venv
+*.pyc
+.vscode/settings.json

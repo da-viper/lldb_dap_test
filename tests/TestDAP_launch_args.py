@@ -1,0 +1,49 @@
+from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldb_dap.dap_types import LaunchArgs
+
+
+class TestDAP_launch_args(DAPTestCaseBase):
+    """
+    Tests launch of a simple program with arguments
+    """
+
+    TEST_PROGRAM = r"""
+#include <stdio.h>
+#include <stdlib.h>
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <unistd.h>
+#endif
+
+int main(int argc, char const *argv[], char const *envp[]) {
+  for (int i = 0; i < argc; ++i)
+    printf("arg[%i] = \"%s\"\n", i, argv[i]);
+  for (int i = 0; envp[i]; ++i)
+    printf("env[%i] = \"%s\"\n", i, envp[i]);
+  char *cwd = getcwd(NULL, 0);
+  printf("cwd = \"%s\"\n", cwd); // breakpoint 1
+  free(cwd);
+  cwd = NULL;
+  return 0; // breakpoint 2
+}"""
+
+    def test(self):
+        program = self.create_and_compile_file(self.TEST_PROGRAM)
+        args = ["one", "with space", "'with single quotes'", '"with double quotes"']
+        self.session.launch_using_config(LaunchArgs(program=program, args=args))
+        self.session.verify_process_exited()
+
+        output = self.session.get_stdout()
+        self.assertTrue(output and len(output) > 0, "expect program output")
+        lines = output.splitlines()
+        # Skip the first argument that contains the program name
+        lines.pop(0)
+        # Make sure arguments we specified are correct
+        for i, arg in enumerate(args):
+            quoted_arg = '"%s"' % (arg)
+            self.assertIn(
+                quoted_arg,
+                lines[i],
+                'arg[%i] "%s" not in "%s"' % (i + 1, quoted_arg, lines[i]),
+            )

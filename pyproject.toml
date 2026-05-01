@@ -1,0 +1,28 @@
+[project]
+name = "dap-test"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = []
+
+# Uses the same black version as upstream lldb.
+[dependency-groups]
+dev = [
+    "black==23.12.1",
+    "isort == 5.13.2",
+    "mypy == 1.13.0",
+    "pytest",
+    "pytest-xdist",
+]
+
+[tool.isort]
+profile = "black"
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["lldb_dap"]
+python_files = ["Test*.py"]
+addopts = ["--durations=7"]
+verbosity_test_cases = "2"
