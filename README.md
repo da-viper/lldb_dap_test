@@ -27,6 +27,9 @@ export DAP_TIMEOUT=100
 # Optional: run lldb_dap in server mode for the tests.
 export DAP_RUN_AS_SERVER=1
 
+# initialize venv.
+uv venv --seed
+
 # Run a single test file.
 uv run pytest tests/TestDAP_step.py -x
 

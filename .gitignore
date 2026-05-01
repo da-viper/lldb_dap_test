@@ -2,3 +2,4 @@ builds
 .venv
 *.pyc
 .vscode/settings.json
+__pycache__
