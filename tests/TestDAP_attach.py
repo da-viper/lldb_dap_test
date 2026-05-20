@@ -3,7 +3,6 @@ Test lldb-dap attach request
 """
 
 import os
-import sys
 import time
 from typing import List, Optional
 import unittest
@@ -114,11 +113,12 @@ int main(int argc, char const *argv[]) {
         """Tests attaching to a process by process ID."""
         # TODO: change this.
         program = self.build_program_for_attach()
+        session = self.create_session()
 
         proc = self.spawn(program=program)
         self.assertIsNone(proc.poll())
 
-        process_event, _ = self.session.attach_using_config(AttachArgs(pid=proc.pid))
+        process_event = session.attach_using_config(AttachArgs(pid=proc.pid))
         self.assertIsNone(proc.poll())
         self.assertEqual(process_event.body.systemProcessId, proc.pid)
         self.verify_pid(proc)
@@ -126,6 +126,7 @@ int main(int argc, char const *argv[]) {
     def test_by_name(self):
         """Tests attaching to a process by process name."""
         program = self.build_program_for_attach()
+        session = self.create_session()
 
         # Use a file as a synchronization point between test and inferior.
         pid_file_path = self.create_file("", f"pid_file_{int(time.monotonic())}")
@@ -136,7 +137,7 @@ int main(int argc, char const *argv[]) {
         wait_for_file_on_target(self, program)
 
         time.sleep(10)
-        process_event, _ = self.session.attach_using_config(AttachArgs(program=program))
+        process_event = session.attach_using_config(AttachArgs(program=program))
         self.assertIsNone(proc.poll())
         self.assertEqual(process_event.body.systemProcessId, proc.pid)
         self.verify_pid(proc)

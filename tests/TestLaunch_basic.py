@@ -34,12 +34,12 @@ int main(int argc, char const *argv[], char const *envp[]) {
 
     def test(self):
         program = self.getBuildArtifact("a.out")
-        self.build()
-        process_event, _ = self.session.launch_using_config(LaunchArgs(program=program))
-        self.session.verify_process_exited(after=process_event)
+        session = self.build_and_create_session()
+        process_event = session.launch_using_config(LaunchArgs(program=program))
+        session.verify_process_exited(after=process_event)
 
         # Now get the STDOUT and verify our program argument is correct
-        output = self.session.get_stdout()
+        output = session.get_stdout()
         self.assertTrue(output and len(output) > 0, "expect program output")
         lines = output.splitlines()
         self.assertIn(program, lines[0], "make sure program path is in first argument")

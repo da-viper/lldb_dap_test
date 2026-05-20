@@ -1,6 +1,7 @@
 from unittest import expectedFailure
+
+from lldb_dap.dap_types import InitializeArgs
 from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldb_dap.dap_types import InitializeArgs, LaunchArgs
 
 
 class TestInitialization(DAPTestCaseBase):
@@ -15,35 +16,38 @@ int main() {
 """
 
     def test_initialize_event(self):
-        session = self.session
-        self.session.initialize_sequence(self.session.initialize_args)
-        session.disconnect()
+        session = self.create_session()
+        session.initialize_sequence(session.initialize_args)
+        session.do_disconnect()
         session.stop()
+        self.assertFalse(session.is_running())
         with self.assertRaises(AssertionError):
             session.ensure_initialized()
 
     def test_initialize(self):
-        capabilities = self.session.initialize_sequence(
-            self.session.initialize_args
-        ).body
+        session = self.create_session()
+        capabilities = session.initialize_sequence(session.initialize_args).body
 
         self.assertIsNotNone(capabilities)
         self.assertTrue(capabilities.supportsConfigurationDoneRequest)
 
     def test_default_initialize(self):
-        capabilities = self.session.initialize_sequence(InitializeArgs()).body
+        session = self.create_session()
+        capabilities = session.initialize_sequence(InitializeArgs()).body
 
         self.assertIsNotNone(capabilities)
         self.assertTrue(capabilities.supportsConfigurationDoneRequest)
 
     def test_initialize_with_custom_client_id(self):
+        session = self.build_and_create_session()
         init_args = InitializeArgs(adapterID="python", clientID="custom-test-client")
-        capabilities = self.session.initialize_sequence(init_args)
+        capabilities = session.initialize_sequence(init_args)
 
         self.assertIsNotNone(capabilities)
 
     @expectedFailure
     def test_initialize_with_missing_required_attribute(self):
+        session = self.build_and_create_session()
         init_args = InitializeArgs(adapterID=None)
-        capabilities = self.session.initialize_sequence(init_args)
+        capabilities = session.initialize_sequence(init_args)
         self.assertIsNotNone(capabilities)

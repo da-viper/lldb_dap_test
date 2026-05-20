@@ -31,12 +31,13 @@ int main(int argc, char const *argv[], char const *envp[]) {
 """
 
     def test(self):
-        program = self.create_and_compile_file(self.TEST_PROGRAM)
-        self.session.launch_using_config(LaunchArgs(program=program))
-        self.session.verify_process_exited()
+        program = self.getBuildArtifact("a.out")
+        session = self.build_and_create_session()
+        session.launch_using_config(LaunchArgs(program=program))
+        session.verify_process_exited()
 
         # Now get the STDOUT and verify our program argument is correct
-        output = self.session.get_stdout()
+        output = session.get_stdout()
         self.assertTrue(output and len(output) > 0, "expect program output")
         lines = output.splitlines()
         self.assertIn(program, lines[0], "make sure program path is in first argument")

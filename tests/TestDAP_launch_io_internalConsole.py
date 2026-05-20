@@ -2,11 +2,12 @@
 Test the redirection after launching in the internal console.
 """
 
+from lldbsuite.test.decorators import skipIfWindows
 from tests.DAP_launch_io import DAP_launchIO
 from lldb_dap.dap_types import Console
 
 
-# @skipIfWindows TODO
+@skipIfWindows
 class TestDAP_launch_io_InternalConsole(DAP_launchIO):
     console = Console.INTERNAL
     __debuggee_stdout = None

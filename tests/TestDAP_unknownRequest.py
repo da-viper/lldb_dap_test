@@ -2,10 +2,10 @@
 Test lldb-dap unknown request.
 """
 
-from typing import Optional
-from lldb_dap.dap_types import EmptyBodyResponse
 from dataclasses import dataclass
-from lldb_dap.dap_types import LaunchArgs
+from typing import Optional
+
+from lldb_dap.dap_types import EmptyBodyResponse, LaunchArgs
 from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
@@ -31,11 +31,12 @@ int main() {
   return 0;
 }
 """
+    IS_C = True
 
     def test_no_arguments(self):
-        program = self.create_test_program_with_name("main.c")
-        session = self.session
-        process_event, _ = session.launch_using_config(
+        session = self.build_and_create_session()
+        program = self.getBuildArtifact("a.out")
+        process_event = session.launch_using_config(
             LaunchArgs(program, stopOnEntry=True)
         )
         session.verify_stopped_on_entry(after=process_event)
@@ -48,9 +49,9 @@ int main() {
         session.continue_to_exit()
 
     def test_with_arguments(self):
-        program = self.create_test_program_with_name("main.c")
-        session = self.session
-        process_event, _ = session.launch_using_config(
+        session = self.build_and_create_session()
+        program = self.getBuildArtifact("a.out")
+        process_event = session.launch_using_config(
             LaunchArgs(program, stopOnEntry=True)
         )
         session.verify_stopped_on_entry(after=process_event)

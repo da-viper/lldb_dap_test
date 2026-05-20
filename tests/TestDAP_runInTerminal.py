@@ -5,12 +5,14 @@ Test lldb-dap runInTerminal reverse request
 import json
 from typing import cast
 
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase, line_number
+from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldb_dap.dap_types import (
     Console,
     LaunchArgs,
     RunInTerminalRequest,
 )
+from lldbsuite.test.decorators import skipIfAsan, skipIfWindows
+from lldbsuite.test.lldbtest import line_number
 
 
 # @skipIfBuildType(["debug"])
@@ -48,17 +50,16 @@ int main(int argc, char *argv[]) {
         with open(fifo_file, "r") as file:
             return file.readline()
 
-    # @skipIfAsan
-    # @skipIfWindows
+    @skipIfAsan
+    @skipIfWindows
     def test_runInTerminal(self):
         """
         Tests the "runInTerminal" reverse request. It makes sure that the IDE can
         launch the inferior with the correct environment variables and arguments.
         """
         source = "main.cpp"
-        program = self.create_and_compile_file(self.TEST_PROGRAM, source)
-        session = self.session
-        breakpoint_line = line_number(source, "// breakpoint")
+        program = self.getBuildArtifact("a.out")
+        session = self.build_and_create_session()
         with session.configure(
             LaunchArgs(
                 program,
@@ -67,6 +68,7 @@ int main(int argc, char *argv[]) {
                 env=["FOO=bar"],
             )
         ) as ctx:
+            breakpoint_line = line_number(source, "// breakpoint")
             session.resolve_source_breakpoints(source, [breakpoint_line])
         process_event = ctx.process_event()
 
@@ -102,8 +104,8 @@ int main(int argc, char *argv[]) {
 
         session.continue_to_exit()
 
-    # @skipIfAsan
-    # @skipIfWindows
+    @skipIfAsan
+    @skipIfWindows
     def test_runInTerminalWithObjectEnv(self):
         """
         Tests the "runInTerminal" reverse request. It makes sure that the IDE can
@@ -113,7 +115,7 @@ int main(int argc, char *argv[]) {
 
         source = self.getBuildArtifact("main.cpp")
         program = self.create_and_compile_file(self.TEST_PROGRAM, source)
-        session = self.session
+        session = self.build_and_create_session()
         session.launch_using_config(
             LaunchArgs(
                 program,
@@ -125,7 +127,7 @@ int main(int argc, char *argv[]) {
 
         request = cast(RunInTerminalRequest, session.last_reverse_request())
         self.assertIsInstance(request, RunInTerminalRequest)
-        request_envs = cast(dict, request.arguments.env)
+        request_envs = self.expect_is_not_none(request.arguments.env)
         self.assertIsNotNone(request_envs)
         self.assertIsInstance(
             request_envs, dict, f"expected dict got {type(request_envs)}"
@@ -135,10 +137,10 @@ int main(int argc, char *argv[]) {
 
         session.continue_to_exit()
 
-    # @skipIfWindows
+    @skipIfWindows
     def test_runInTerminalInvalidTarget(self):
         # self.build_and_create_debug_adapter()
-        session = self.session
+        session = self.build_and_create_session()
         launch_handle = session.initialize_and_launch(
             LaunchArgs(
                 "INVALIDPROGRAM",
@@ -158,4 +160,4 @@ int main(int argc, char *argv[]) {
         response_error = self.expect_is_not_none(response_body.error)
         self.assertIn("'INVALIDPROGRAM' does not exist", response_error.format)
 
-        session.disconnect()
+        session.do_disconnect()

@@ -53,10 +53,12 @@ int main(int argc, char *argv[]) {
 }
 
 """
+    def setUp(self):
+        super().setUp()
+        self.session = self.build_and_create_session()
 
     def all_redirection(self, console: Console, with_args: bool = False):
         """Test all standard io redirection."""
-        self.build()
         program = self.getBuildArtifact("a.out")
         input_text = "from stdin with redirection"
         args_text = "string from argv"
@@ -96,7 +98,6 @@ int main(int argc, char *argv[]) {
 
     def stdin_redirection(self, console: Console, with_args: bool = False):
         """Test only stdin redirection."""
-        self.build()
         program = self.getBuildArtifact("a.out")
         input_text = "string from stdin"
         args_text = "string from argv"
@@ -124,7 +125,6 @@ int main(int argc, char *argv[]) {
 
     def stdout_redirection(self, console: Console, with_env: bool = False):
         """Test only stdout redirection."""
-        self.build()
         program = self.getBuildArtifact("a.out")
 
         argv_text = "output with\n multiline"
@@ -184,7 +184,6 @@ int main(int argc, char *argv[]) {
 
     def stderr_redirection(self, console: Console, with_env: bool = False):
         """Test only stdout redirection."""
-        self.build()
         program = self.getBuildArtifact("a.out")
 
         argv_text = "output with\n multiline"

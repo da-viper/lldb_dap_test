@@ -2,19 +2,20 @@
 Test lldb-dap dataBreakpointInfo and setDataBreakpoints requests
 """
 
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase, line_number
 from lldb_dap.dap_types import DataBreakpoint, LaunchArgs
+from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.decorators import skipIfWindows
+from lldbsuite.test.lldbtest import line_number
 
 
 class TestDAP_setDataBreakpoints(DAPTestCaseBase):
     ACCESS_TYPES = ["read", "write", "readWrite"]
 
-    # TODO: fix me
-    # @skipIfWindows
+    @skipIfWindows
     def test_duplicate_start_addresses(self):
         """Test setDataBreakpoints with multiple watchpoints starting at the same addresses."""
-        program = self.create_and_compile_file(TEST_PROGRAM, "main.cpp")
-        session = self.session
+        program = self.getBuildArtifact("a.out")
+        session = self.build_and_create_session()
         source = self.getSourcePath("main.cpp")
         first_loop_break_line = line_number(source, "// first loop breakpoint")
         with session.configure(LaunchArgs(program)) as ctx:
@@ -75,12 +76,12 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
         session.set_data_breakpoints([])
         session.continue_to_exit()
 
-    # @skipIfWindows
+    @skipIfWindows
     def test_expression(self):
         """Tests setting data breakpoints on expression."""
         source = self.getSourcePath("main.cpp")
-        program = self.create_and_compile_file(TEST_PROGRAM, "main.cpp")
-        session = self.session
+        program = self.getBuildArtifact("a.out")
+        session = self.build_and_create_session()
         first_loop_break_line = line_number(source, "// first loop breakpoint")
         with session.configure(LaunchArgs(program)) as ctx:
             session.resolve_source_breakpoints(source, [first_loop_break_line])
@@ -136,12 +137,12 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
         session.continue_to_exit()
 
     # TODO: renable windows
-    # @skipIfWindows
+    @skipIfWindows
     def test_functionality(self):
         """Tests setting data breakpoints on variable."""
         source = self.getSourcePath("main.cpp")
-        program = self.create_and_compile_file(TEST_PROGRAM, "main.cpp")
-        session = self.session
+        program = self.getBuildArtifact("a.out")
+        session = self.build_and_create_session()
         first_loop_break_line = line_number(source, "// first loop breakpoint")
         with session.configure(LaunchArgs(program)) as ctx:
             session.resolve_source_breakpoints(source, [first_loop_break_line])
@@ -192,8 +193,7 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
         thread_ctx = session.get_thread_context(stop_event.body.threadId)
         top_frame_ctx = thread_ctx.top_frame()
         # TODO: simplify this to (get_local_variable("arr").get_child("[2]"))
-        arr = top_frame_ctx.locals["arr"]
-        arr_2 = arr["[2]"]
+        arr_2 = top_frame_ctx.locals["arr"]["[2]"]
         i_val = top_frame_ctx.locals["i"]
         self.assertEqual(arr_2.value, "42")
         self.assertEqual(i_val.value, "2")
@@ -214,7 +214,7 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
         self.assertEqual(len(breakpoints), len(data_breakpoints))
         self.assertTrue(breakpoints[0].verified)
         breakpoint0_id = self.expect_is_not_none(breakpoints[0].id)
-        stop_event = self.session.continue_to_any_breakpoint([breakpoint0_id])
+        stop_event = session.continue_to_any_breakpoint([breakpoint0_id])
 
         thread_ctx = session.get_thread_context(stop_event.body.threadId)
         top_frame_ctx = thread_ctx.top_frame()
@@ -237,12 +237,12 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
         x_var = top_frame_ctx.locals["x"]
         self.assertEqual(x_var.value, "10")
 
-    # @skipIfWindows TODO: reenable
+    @skipIfWindows
     def test_bytes(self):
         """Tests setting data breakpoints on memory range."""
         source = self.getSourcePath("main.cpp")
-        program = self.create_and_compile_file(TEST_PROGRAM, "main.cpp")
-        session = self.session
+        program = self.getBuildArtifact("a.out")
+        session = self.build_and_create_session()
         first_loop_break_line = line_number(source, "// first loop breakpoint")
         with session.configure(LaunchArgs(program)) as ctx:
             session.resolve_source_breakpoints(source, [first_loop_break_line])
@@ -305,7 +305,7 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
         session.continue_to_exit()
 
 
-TEST_PROGRAM = r"""
+    TEST_PROGRAM = r"""
 int main(int argc, char const *argv[]) {
   // Test for data breakpoint
   int x = 0;

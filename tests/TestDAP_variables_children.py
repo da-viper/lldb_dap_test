@@ -1,16 +1,7 @@
-from typing import cast
-import unittest
-
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase, line_number, skipif_darwin
-from lldb_dap.dap_types import (
-    EvaluateArgs,
-    LaunchArgs,
-    StepOutArgs,
-    Thread,
-    ThreadsArgs,
-    VariablesArgs,
-)
-from lldb_dap.session_helpers import ThreadContext
+from lldb_dap.dap_types import LaunchArgs, VariablesArgs
+from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.decorators import skipif_darwin
+from lldbsuite.test.lldbtest import line_number
 
 
 class TestDAP_variables_children(DAPTestCaseBase):
@@ -83,10 +74,10 @@ def __lldb_init_module(debugger, dict):
 
     def test_get_num_children(self):
         """Test that GetNumChildren is not called for formatters not producing indexed children."""
+        session = self.build_and_create_session()
         source = self.getBuildArtifact("main.cpp")
         program = self.create_test_program_with_name(source)
         self.create_file(self.FORMATTER_PY, "formatter.py")
-        session = self.session
         # session.launch_using_config(config)
         # TODO this should work
         breakpoint_line = line_number(source, "// break here")
@@ -121,18 +112,16 @@ def __lldb_init_module(debugger, dict):
         """
         Test the stepping out of a function with return value show the children correctly
         """
-        source = self.getBuildArtifact("main.cpp")
-        program = self.create_test_program_with_name(source)
-        session = self.session
-        handle = session.initialize_and_launch(LaunchArgs(program))
-        function_name = "test_return_variable_with_children"
-        _, breakpoint_ids = session.resolve_function_breakpoints([function_name])
+        session = self.build_and_create_session()
+        program = self.getBuildArtifact("a.out")
 
-        self.assertEqual(len(breakpoint_ids), 1)
-        session.verify_configuration_done()
-        launch_resp = session.get_response(handle)
+        with session.configure(LaunchArgs(program)) as ctx:
+            function_name = "test_return_variable_with_children"
+            breakpoint_ids = session.resolve_function_breakpoints([function_name])
+            self.assertEqual(len(breakpoint_ids), 1)
+
         stopped_event = session.wait_until_any_breakpoint_hit(
-            breakpoint_ids, after=launch_resp
+            breakpoint_ids, after=ctx.process_event()
         )
 
         thread_id = self.expect_is_not_none(
@@ -141,7 +130,7 @@ def __lldb_init_module(debugger, dict):
         )
         self.assertEqual(stopped_event.body.reason, "breakpoint")
 
-        thread = ThreadContext(thread_id, session)
+        thread = session.get_thread_context(thread_id)
         thread.step_out()
         local_variables = thread.top_frame().locals.variables()
         self.assertIsNot(len(local_variables), 0)

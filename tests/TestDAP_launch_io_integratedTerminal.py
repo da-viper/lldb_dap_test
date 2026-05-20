@@ -2,21 +2,20 @@
 Test the redirection after launching in the integrated terminal.
 """
 
-from tests.DAP_launch_io import DAP_launchIO
 from lldb_dap.dap_types import Console
+from tests.DAP_launch_io import DAP_launchIO
+from lldbsuite.test.decorators import (
+    skipIfAsan,
+    skipIfBuildType,
+    skipIfRemote,
+    skipIfWindows,
+)
 
-# from lldbsuite.test.decorators import (
-#     skipIfAsan,
-#     skipIfBuildType,
-#     skipIfRemote,
-#     skipIfWindows,
-# )
 
-
-# @skipIfRemote TODO:
-# @skipIfAsan
-# @skipIfBuildType(["debug"])
-# @skipIfWindows
+@skipIfRemote
+@skipIfAsan
+@skipIfBuildType(["debug"])
+@skipIfWindows
 class TestDAP_launch_io_IntegratedTerminal(DAP_launchIO):
     console = Console.INTEGRATED_TERMINAL
 

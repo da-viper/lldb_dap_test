@@ -1593,6 +1593,9 @@ class SourceArgs:
     sourceReference: int
     source: Optional[Source] = None
 
+    command_ = "source"
+    response_class_ = SourceResponse
+
 
 @dataclass(frozen=True)
 class ThreadsResponse(Response):
@@ -1758,31 +1761,56 @@ class ExceptionInfoArgs:
 
 
 @dataclass(frozen=True)
+class ReadMemoryResponse(Response):
+    @dataclass(frozen=True)
+    class Body:
+        address: str
+        unreadableBytes: Optional[int] = None
+        data: Optional[str] = None  # base64-encoded bytes
+
+    body: Body
+
+
+@dataclass(frozen=True)
+@args_protocol
 class ReadMemoryArgs:
     memoryReference: str
     count: int
     offset: Optional[int] = None
 
-
-@dataclass(frozen=True)
-class ReadMemoryResponseBody:
-    address: str
-    unreadableBytes: Optional[int] = None
-    data: Optional[str] = None  # base64-encoded bytes
+    command_ = "readMemory"
+    response_class_ = ReadMemoryResponse
 
 
 @dataclass(frozen=True)
+class WriteMemoryResponse(Response):
+    @dataclass(frozen=True)
+    class Body:
+        offset: Optional[int] = None
+        bytesWritten: Optional[int] = None
+
+    body: Body
+
+
+@dataclass(frozen=True)
+@args_protocol
 class WriteMemoryArgs:
     memoryReference: str
-    data: bytes  # base64-encoded bytes
+    data: str  # base64-encoded bytes
     offset: Optional[int] = None
     allowPartial: Optional[bool] = None
 
+    command_ = "writeMemory"
+    response_class_ = WriteMemoryResponse
+
 
 @dataclass(frozen=True)
-class WriteMemoryResponseBody:
-    offset: Optional[int] = None
-    bytesWritten: Optional[int] = None
+class DisassembleResponse(Response):
+    @dataclass(frozen=True)
+    class Body:
+        instructions: List[DisassembledInstruction]
+
+    body: Body
 
 
 @dataclass(frozen=True)
@@ -1793,10 +1821,8 @@ class DisassembleArgs:
     instructionOffset: Optional[int] = None
     resolveSymbols: Optional[bool] = None
 
-
-@dataclass(frozen=True)
-class DisassembleResponseBody:
-    instructions: List[DisassembledInstruction]
+    command_ = "disassemble"
+    response_class_ = DisassembleResponse
 
 
 @dataclass(frozen=True)

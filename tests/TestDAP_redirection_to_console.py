@@ -1,5 +1,6 @@
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase, line_number
+from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.lldbtest import line_number
 
 
 class TestDAP_redirection_to_console(DAPTestCaseBase):
@@ -27,8 +28,7 @@ int main(int argc, char const *argv[]) {
 
             Exception: unexpected malformed message from lldb-dap
         """
-        self.build()
-        session = self.session
+        session = self.build_and_create_session()
         program = self.getBuildArtifact("a.out")
         source = "main.cpp"
         breakpoint1_line = line_number(source, "// breakpoint 1")

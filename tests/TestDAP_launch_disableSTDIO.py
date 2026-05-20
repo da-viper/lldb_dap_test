@@ -5,6 +5,7 @@ Test lldb-dap launch request.
 
 from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.decorators import skipIfWindows
 
 
 class TestDAP_launch_disableSTDIO(DAPTestCaseBase):
@@ -34,12 +35,13 @@ int main(int argc, char const *argv[], char const *envp[]) {
 }
 """
 
-    # @skipIfWindows
+    @skipIfWindows
     def test(self):
-        program = self.create_and_compile_file(self.TEST_PROGRAM)
-        self.session.launch_using_config(LaunchArgs(program=program, disableSTDIO=True))
-        self.session.verify_process_exited()
+        program = self.getBuildArtifact("a.out")
+        session = self.build_and_create_session()
+        session.launch_using_config(LaunchArgs(program=program, disableSTDIO=True))
+        session.verify_process_exited()
 
         # Now get the STDOUT and verify our program argument is correct
-        output = self.session.get_stdout()
+        output = session.get_stdout()
         self.assertEqual(output, "", "expect no program output")

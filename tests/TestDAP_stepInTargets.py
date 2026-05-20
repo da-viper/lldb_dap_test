@@ -2,13 +2,12 @@
 Test lldb-dap stepInTargets request
 """
 
-from lldb_dap.lldb_dap_testcase import skipif_linux
-import unittest
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase, line_number, skipif_darwin
 from lldb_dap.dap_types import LaunchArgs, StepInTargetsArgs
+from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.decorators import no_match, skipIf, skipif_darwin, skipif_linux
+from lldbsuite.test.lldbtest import line_number
 
 
-# @unittest.skip("")
 class TestDAP_stepInTargets(DAPTestCaseBase):
     TEST_PROGRAM = r"""
 int foo(int val, int extra) { return val + extra; }
@@ -34,14 +33,12 @@ int main(int argc, char const *argv[]) {
         """
         Tests the basic stepping in targets with directly calls.
         """
-        program = self.create_test_program_with_name(
-            "main.cpp"
-        )  # self.getBuildArtifact("a.out")
+        program = self.getBuildArtifact("a.out")
+        session = self.build_and_create_session()
         source = self.getSourcePath("main.cpp")
 
         breakpoint_line = line_number(source, "// set breakpoint here")
         lines = [breakpoint_line]
-        session = self.session
         # Set breakpoint in the thread function so we can step the threads
         with session.configure(LaunchArgs(program)) as ctx:
             session.resolve_source_breakpoints(source, lines)
@@ -85,12 +82,12 @@ int main(int argc, char const *argv[]) {
 
         session.continue_to_exit()
 
-    # @skipIf(archs=no_match(["x86", "x86_64"])) # TODO: enable later.
-    @skipif_darwin()
+    @skipIf(archs=no_match(["x86", "x86_64"]))
+    @skipif_darwin()  # TODO remove (should work on darwin)
     def test_supported_capability_x86_arch(self):
-        program = self.create_test_program_with_name("main.cpp")
+        program = self.getBuildArtifact("a.out")
         source = self.getSourcePath("main.cpp")
-        session = self.session
+        session = self.build_and_create_session()
         bp_lines = [line_number(source, "// set breakpoint here")]
         with session.configure(LaunchArgs(program)) as ctx:
             session.resolve_source_breakpoints(source, bp_lines)
@@ -103,12 +100,12 @@ int main(int argc, char const *argv[]) {
         )
         session.continue_to_exit()
 
-    # @skipIf(archs=["x86", "x86_64"]) # TODO: enable later
-    @skipif_linux()
+    @skipIf(archs=["x86", "x86_64"])
+    @skipif_linux()  # TODO remove (should work on linux)
     def test_supported_capability_other_archs(self):
         program = self.create_test_program_with_name("main.cpp")
         source = self.getSourcePath("main.cpp")
-        session = self.session
+        session = self.build_and_create_session()
         bp_lines = [line_number(source, "// set breakpoint here")]
         with session.configure(LaunchArgs(program)) as ctx:
             session.resolve_source_breakpoints(source, bp_lines)

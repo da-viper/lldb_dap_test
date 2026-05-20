@@ -14,34 +14,35 @@ class TestDAP_launch_termination(DAPTestCaseBase):
     Tests the correct termination of lldb-dap upon a 'disconnect' request.
     """
 
-    def test(self):
-        log_file = str(self.test_dir / "launch_termination.log")
-        # adapter = DebugAdapter(
-        #     executable="/usr/bin/gdb", opts=DebugAdapterOptions(args=["-i", "dap"])
-        # )
-        adapter = self.create_adapter_in_stdio_mode(DebugAdapterOptions())
-
-        # The underlying lldb-dap process must be alive
-        self.assertTrue(adapter.is_alive)
-        session = Session(
-            self.test_dir,
-            adapter,
-            self.adapter_timeout,
-            log_file=log_file,
+    def _test_termination_socket(self):
+        adapter = self.create_adapter_in_server_mode(
+            DebugAdapterOptions(),
+            connection="listen://localhost:0",
+            connection_timeout=15,
         )
-        session.start()
+        self.do_test_termination(adapter)
 
+    def test_termination_stdio(self):
+        adapter = self.create_adapter_in_stdio_mode(DebugAdapterOptions())
+        self.do_test_termination(adapter)
+
+    def test_termination_multiple_connections(self):
+        ...
+
+    def do_test_termination(self, adapter: DebugAdapter):
+        # adapter = DebugAdapter("/usr/bin/gdb", DebugAdapterOptions(args=["-i", "dap"]))
+        # The underlying lldb-dap process must be alive
+        self.assertTrue(adapter.is_alive, f"adapter is dead: {adapter.process.args}")
+        session = self.create_session(adapter, disconnect_automatically=False)
+
+        session.initialize_sequence(session.initialize_args)
         # The lldb-dap process should finish even though
         # we didn't close the communication socket explicitly
-        handle = session.send_request(DisconnectArgs())
-        response = session.get_response(handle)
-        self.assertTrue(response.success)
+        session.do_disconnect()
 
         # Wait until the underlying lldb-dap process dies.
-        # TODO: fix the timeout.
-        adapter_process = adapter.process
-        adapter_process.wait(timeout=self.adapter_timeout)
-        self.assertFalse(session.is_running())
+        adapter.process.wait(timeout=self.DEFAULT_TIMEOUT)
+        self.assertFalse(session.is_running(), f"expected ended session.")
 
         # Check the return code
-        self.assertEqual(adapter_process.poll(), 0)
+        self.assertEqual(adapter.process.poll(), 0)

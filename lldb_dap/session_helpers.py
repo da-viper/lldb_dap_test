@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import dataclasses
 import os
 from pathlib import Path
@@ -32,6 +33,7 @@ from lldb_dap.dap_types import (
     DAPError,
     DataBreakpoint,
     DataBreakpointInfoArgs,
+    DisassembleArgs,
     DisconnectArgs,
     EmptyBodyResponse,
     ErrorResponse,
@@ -45,6 +47,7 @@ from lldb_dap.dap_types import (
     InitializeArgs,
     InitializedEvent,
     InitializeResponse,
+    InstructionBreakpoint,
     InvalidatedEvent,
     LaunchArgs,
     MemoryEvent,
@@ -55,13 +58,17 @@ from lldb_dap.dap_types import (
     OutputCategory,
     OutputEvent,
     ProcessEvent,
+    ReadMemoryArgs,
     Response,
+    RestartArgs,
     ScopesArgs,
     Scope,
     SetBreakpointsArgs,
     SetDataBreakpointsArgs,
     SetFunctionBreakpointsArgs,
+    SetInstructionBreakpointsArgs,
     SetVariableArgs,
+    SetVariableResponse,
     Source,
     SourceBreakpoint,
     StackFrame,
@@ -77,6 +84,7 @@ from lldb_dap.dap_types import (
     ValueFormat,
     Variable,
     VariablesArgs,
+    WriteMemoryArgs,
 )
 from lldb_dap.utils import DebugAdapter
 
@@ -218,6 +226,16 @@ class FrameContext:
             expression, frameId=self._frame.id, context=context, format=format
         )
 
+    def disassemble(self):
+        mem_ref = self._frame.instructionPointerReference
+        if mem_ref is None:
+            self._session.test_case.fail(
+                f"expects 'instructionPointerReference' for frame {self.frame}"
+            )
+        return self._session.send_disassemble(
+            mem_ref, instructionOffset=0, instructionCount=100
+        )
+
 
 class _VariableContainer:
     """Shared dict-like behaviour for contexts that hold a variablesReference.
@@ -273,15 +291,11 @@ class _VariableContainer:
             count=count,
         )
 
-    def set(self, name: str, value, *, is_hex: bool = False):
-        """Send a ``setVariable`` request for a named child.
-
-        Returns the adapter's response — a ``SetVariableResponse`` on success
-        or an ``ErrorResponse`` on failure. Does not raise on failure, so
-        negative tests can check ``.success`` directly.
+    def set(self, name: str, value, *, is_hex: bool = False) -> SetVariableResponse:
+        """Sends a `setVariable` request for a named child.
         """
         self._session._check_stop_generation(self._generation, self)
-        handle = self._session.send_request(
+        return self._session.request_and_respond(
             SetVariableArgs(
                 variablesReference=self._container_reference(),
                 name=name,
@@ -289,7 +303,6 @@ class _VariableContainer:
                 format=ValueFormat(hex=True) if is_hex else None,
             )
         )
-        return self._session.get_response_or_error(handle)
 
     def _container_reference(self) -> int:
         raise NotImplementedError
@@ -537,6 +550,7 @@ class _ConfigureContext:
 
         Must be called after the ``with`` block has exited.
         """
+        # TODO: make this a property?
         if self._process_event is None:
             raise DAPError(
                 "ConfigureContext.process_event() called before the context exited"
@@ -587,12 +601,6 @@ class DAPTestSession(Session):
             supportsMemoryEvent=True,
         )
 
-        # The breakpoint to set during the initial launch sequence.
-        self._pending_source_breakpoints: list[tuple[str, list[int]]] = []
-        self._pending_function_breakpoints: list[str] = []
-        # TODO: actually support the exception filters.
-        self._pending_exception_filters: list[str] = []
-
     def update_initialize_args(self, **kwargs):
         self.test_case.assertFalse(
             self._state.is_initialized,
@@ -605,100 +613,13 @@ class DAPTestSession(Session):
     def initialize_args(self):
         return dataclasses.replace(self._init_args)
 
-    def start_debug_session(
-        self,
-        config: LaunchArgs | AttachArgs,
-    ):
-        """
-        Launch or attach to a program using the provided configuration.
-
-        Orchestrates the full DAP initialization sequence:
-            1. Request and respond to the Initialize command.
-            2. Send launch/attach request.
-            3. Wait for InitializedEvent.
-            4. Set and verify the pending source and function breakpoints.
-            5. Request and response to configurationDone.
-            6. Wait for ProcessEvent and launch/attach response.
-
-        Args:
-            config: LaunchArgs for launching a new process or AttachArgs for
-                attaching to an existing one.
-
-        Returns:
-            A tuple of (ProcessEvent, resolved_breakpoint_ids). The ProcessEvent
-            is returned instead of the launch/attach response as it contains more
-            information and most test are more likely to test state/values after
-            the process event.
-
-        Raises:
-            AssertionError: If resolved breakpoint count does not match requested,
-                or if start method is invalid.
-
-        Example:
-
-            >>> config = LaunchArgs(program="/path/to/exe")
-            >>> client.add_source_breakpoint("main.py", [10, 25])
-            >>> proc_event, bp_ids = client.start_debug_session(config)
-        """
-        self.test_case.assertFalse(
-            self._state.is_initialized, "session already started."
-        )
-        init_response = self.initialize_sequence(self.initialize_args)
-
-        # launch request
-        launch_handle = self.send_request(config)
-
-        # TODO:(handle breakpoint before configuration done) parallel
-        self.wait_for_event(InitializedEvent, after=init_response)
-        # breakpoint stuff
-        resolved_bp_ids: list[int] = []
-        source_breakpoints = self._pending_source_breakpoints
-        if len(source_breakpoints) > 0:
-            for source, lines in source_breakpoints:
-                bp_ids = self.resolve_source_breakpoints(source, lines)
-                self.test_case.assertEqual(
-                    len(lines),
-                    len(bp_ids),
-                    "expect correct number of breakpoints",
-                )
-                resolved_bp_ids.extend(bp_ids)
-            self._pending_source_breakpoints.clear()
-
-        function_breakpoints = self._pending_function_breakpoints
-        if len(function_breakpoints) > 0:
-            _, bp_ids = self.resolve_function_breakpoints(function_breakpoints)
-            self.test_case.assertEqual(
-                len(function_breakpoints),
-                len(bp_ids),
-                "expect correct number of breakpoints",
-            )
-            resolved_bp_ids.extend(bp_ids)
-            self._pending_function_breakpoints.clear()
-
-        # configuration done
-        self.verify_configuration_done()
-
-        # process launched
-        proc_event = self.wait_for_event(ProcessEvent, after=init_response)
-        if isinstance(config, LaunchArgs):
-            request_type = "launch"
-        elif isinstance(config, AttachArgs):
-            request_type = "attach"
-        else:
-            self.test_case.fail(f"unknown config for  {config=}")
-
-        if start_method := proc_event.body.startMethod:
-            self.test_case.assertIn(
-                start_method,
-                ("launch", "attach"),
-                f"expected launch or attach got '{start_method}'",
-            )
-
-        self.get_response(launch_handle)
+    def start_debug_session(self, config: LaunchArgs | AttachArgs):
+        with self.configure(config) as ctx:
+            pass
         # We are returning the process event as it contains more information
         # than the (launch/attach) response and we may get the stop on entry event before the (launch/attach) response.
         # and most of the test only do something after we have a process.
-        return proc_event, resolved_bp_ids
+        return ctx.process_event()
 
     def launch_using_config(self, config: LaunchArgs):
         return self.start_debug_session(config)
@@ -777,56 +698,6 @@ class DAPTestSession(Session):
 
         return self.get_response(attach_handle)
 
-    def add_pending_source_breakpoints(self, source_path: str, lines: list[int]):
-        self.test_case.assertFalse(
-            self._state.is_initialized,
-            "can only add pending breakpoints before session is initialized.",
-        )
-        self.test_case.assertTrue(source_path)
-        self.test_case.assertGreater(
-            len(lines), 0, "expect breakpoint lines is not empty"
-        )
-        self._pending_source_breakpoints.append((source_path, lines))
-
-    def add_pending_function_breakpoints(self, function_names: list[str]):
-        self.test_case.assertFalse(
-            self._state.is_initialized,
-            "can only add pending breakpoints before session is initialized.",
-        )
-        self.test_case.assertGreater(
-            len(function_names), 0, "expect function names is not empty"
-        )
-        self._pending_function_breakpoints.extend(function_names)
-
-    def resolve_source_breakpoints(
-        self, source_path: str, sbreakpoints: list[int] | list[SourceBreakpoint]
-    ):
-        last_response = self.last_response()
-        bp_response = self.set_source_breakpoints(
-            source_path,
-            sbreakpoints,
-        )
-
-        breakpoints = bp_response.body.breakpoints
-        pending_breakpoint_ids: list[int] = []
-        verified_breakpoint_ids: list[int] = []
-        for breakpoint in breakpoints:
-            assert breakpoint.id is not None
-
-            if breakpoint.verified:
-                verified_breakpoint_ids.append(breakpoint.id)
-            else:
-                pending_breakpoint_ids.append(breakpoint.id)
-
-        if len(pending_breakpoint_ids) > 0:
-            self.wait_until_all_breakpoints_verified(
-                pending_breakpoint_ids, after=last_response
-            )
-
-        # Returns all the ids since they are both verified and resolved.
-        all_ids = [*pending_breakpoint_ids, *verified_breakpoint_ids]
-        return all_ids
-
     def set_source_breakpoints(
         self, source_path: str, breakpoints: list[int] | list[SourceBreakpoint]
     ):
@@ -839,7 +710,7 @@ class DAPTestSession(Session):
         if any(not isinstance(bp, SourceBreakpoint) for bp in breakpoints):
             self.test_case.fail(
                 "breakpoints must only contain ints or SourceBreakpoints."
-                f"got: {breakpoints}"
+                f" got: {breakpoints}"
             )
 
         bps = cast(List[SourceBreakpoint], breakpoints)
@@ -855,23 +726,49 @@ class DAPTestSession(Session):
         condition: Optional[str] = None,
         hit_condition: Optional[str] = None,
     ):
-        def name_to_breakpoint(name: str):
-            return FunctionBreakpoint(
-                name, condition=condition, hitCondition=hit_condition
-            )
-
-        f_breakpoints = list(map(name_to_breakpoint, function_names))
+        f_breakpoints = [
+            FunctionBreakpoint(name, condition=condition, hitCondition=hit_condition)
+            for name in function_names
+        ]
         response = self.request_and_respond(SetFunctionBreakpointsArgs(f_breakpoints))
         return response
+
+    def resolve_source_breakpoints(
+        self, source_path: str, breakpoints: list[int] | list[SourceBreakpoint]
+    ):
+        last_response = self.last_response()
+        bp_response = self.set_source_breakpoints(source_path, breakpoints)
+
+        resp_breakpoints = bp_response.body.breakpoints
+        pending_breakpoint_ids: list[int] = []
+        verified_breakpoint_ids: list[int] = []
+        for breakpoint in resp_breakpoints:
+            assert breakpoint.id is not None
+
+            if breakpoint.verified:
+                verified_breakpoint_ids.append(breakpoint.id)
+            else:
+                pending_breakpoint_ids.append(breakpoint.id)
+
+        if len(pending_breakpoint_ids) > 0:
+            self.wait_until_all_breakpoints_verified(
+                pending_breakpoint_ids, after=last_response
+            )
+
+        # Returns all the ids since they are both verified and resolved.
+        all_ids = [*pending_breakpoint_ids, *verified_breakpoint_ids]
+
+        self.test_case.assertEqual(
+            len(breakpoints), len(all_ids), "expect correct number of breakpoints"
+        )
+        return all_ids
 
     def resolve_function_breakpoints(
         self,
         function_names: list[str],
         condition: Optional[str] = None,
         hit_condition: Optional[str] = None,
-        *,
-        wait_for_verified: bool = True,
-    ) -> Tuple[AnyBreakpointsResponse, List[int]]:
+    ) -> List[int]:
         """Sets breakpoints by function name given an array of function names
         and returns an array of strings containing the breakpoint IDs
         ("1", "2") for each breakpoint that was set.
@@ -890,16 +787,19 @@ class DAPTestSession(Session):
             return ids
 
         all_verified = all(bp.verified for bp in breakpoints)
-        if not wait_for_verified or all_verified:
-            return response, breakpoints_to_ids(breakpoints)
+        if not all_verified:
+            # Use the response from before the 'setFunction' request for verification,
+            # as a breakpoint event could be received prior to the 'setFunction' response.
+            self.wait_until_all_breakpoints_verified(breakpoints, after=last_response)
 
-        # We verify from the response before the 'setFunction' request as
-        # we may have received a breakpoint event before the 'setFunction' response.
-        self.wait_until_all_breakpoints_verified(breakpoints, after=last_response)
-        return response, breakpoints_to_ids(breakpoints)
+        return breakpoints_to_ids(breakpoints)
 
     def set_data_breakpoints(self, breakpoints: list[DataBreakpoint]):
         return self.request_and_respond(SetDataBreakpointsArgs(breakpoints=breakpoints))
+
+    def set_instruction_breakpoints(self, memory_references: list[str]):
+        breakpoints = [InstructionBreakpoint(ref) for ref in memory_references]
+        return self.request_and_respond(SetInstructionBreakpointsArgs(breakpoints))
 
     def set_breakpoint_locations(
         self,
@@ -1127,9 +1027,7 @@ class DAPTestSession(Session):
             after=after, until=matches_any_reason_until, timeout_msg=timeout_msg
         )
 
-        self.test_case.assertIsInstance(
-            event, StoppedEvent, f"wait_for_stopped after seq: {after.seq}"
-        )
+        self.test_case.assertIsInstance(event, StoppedEvent, f"after seq: {after.seq}")
         self.test_case.assertEqual(event.event, EventName.STOPPED)
         return cast(StoppedEvent, event)
 
@@ -1143,7 +1041,7 @@ class DAPTestSession(Session):
         """
         event = self.wait_for_stopped_or_exited(after=after)
         self.test_case.assertIsInstance(event, ExitedEvent)
-        self.test_case.assertEqual(event.event, "exited")
+        self.test_case.assertEqual(event.event, "exited", "expected ExitedEvent'")
         return cast(ExitedEvent, event)
 
     def verify_next_module_event(
@@ -1186,9 +1084,12 @@ class DAPTestSession(Session):
         self.ensure_initialized()
         return self.request_and_respond(ContinueArgs())
 
-    def continue_to_exit(self, exitCode=0) -> ExitedEvent:
+    def continue_to_exit(self, exitCode: int = 0) -> ExitedEvent:
         continue_response = self.do_continue()
         return self.verify_process_exited(after=continue_response, exitCode=exitCode)
+
+    def continue_to_breakpoint(self, breakpoint_id: int):
+        return self.continue_to_any_breakpoint([breakpoint_id])
 
     def continue_to_any_breakpoint(self, breakpoint_ids: list[int]):
         response = self.do_continue()
@@ -1257,6 +1158,12 @@ class DAPTestSession(Session):
             in_output = pattern in event_output
             return in_output
 
+        timeout_msg = f"{timeout_msg}\n\t" if timeout_msg else ""
+        timeout_msg += (
+            f"collecting output category '{category}' "
+            f"until found pattern: '{pattern}'."
+        )
+
         event = self.wait_for_event(
             OutputEvent, after=after, until=matches_pattern, timeout_msg=timeout_msg
         )
@@ -1266,22 +1173,13 @@ class DAPTestSession(Session):
         return CapturedOutput(seen_texts="".join(seen_outputs), event=event)
 
     def collect_console_until(self, pattern: str, *, after: Event | Response):
-        timeout_msg = f"collecting console until found pattern: '{pattern}'."
-        return self.collect_output_until(
-            pattern, OutputCategory.CONSOLE, after=after, timeout_msg=timeout_msg
-        )
+        return self.collect_output_until(pattern, OutputCategory.CONSOLE, after=after)
 
     def collect_stdout_until(self, pattern: str, *, after: Event | Response):
-        timeout_msg = f"collecting stdout until found pattern: '{pattern}'."
-        return self.collect_output_until(
-            pattern, OutputCategory.STDOUT, after=after, timeout_msg=timeout_msg
-        )
+        return self.collect_output_until(pattern, OutputCategory.STDOUT, after=after)
 
     def collect_important_until(self, pattern: str, *, after: Event | Response):
-        timeout_msg = f"collecting important until found pattern: '{pattern}'."
-        return self.collect_output_until(
-            pattern, OutputCategory.IMPORTANT, after=after, timeout_msg=timeout_msg
-        )
+        return self.collect_output_until(pattern, OutputCategory.IMPORTANT, after=after)
 
     def verify_stopped(self, any_reason: StoppedReason, *, after: Event | Response):
         timeout_msg = f"waiting for 'StoppedEvent' for reason: {any_reason}"
@@ -1306,16 +1204,13 @@ class DAPTestSession(Session):
 
         self.test_case.assertIn(event_body.reason, bp_reasons, f"got {event_body}")
         if expected_ids:
-            self.test_case.assertIsNotNone(
-                event_body.hitBreakpointIds, f"expect breakpoint id(s) {expected_ids}"
-            )
+            fail_msg = f"expect breakpoint id(s) {expected_ids}"
+            self.test_case.assertIsNotNone(event_body.hitBreakpointIds, fail_msg)
             hit_bp_ids = cast(List[int], event_body.hitBreakpointIds)
+
             for expected_id in expected_ids:
-                self.test_case.assertIn(
-                    expected_id,
-                    hit_bp_ids,
-                    f"expected breakpoint id not found in {expected_ids}",
-                )
+                fail_msg = f"expected breakpoint id not found in {expected_ids}"
+                self.test_case.assertIn(expected_id, hit_bp_ids, fail_msg)
 
         return stopped_event
 
@@ -1345,22 +1240,15 @@ class DAPTestSession(Session):
             f"stopped event missing description {event_body}",
         )
         description = cast(str, event_body.description)
-        self.test_case.assertRegex(
-            description,
-            expected_description,
-            f"for 'stopped' event {event_body!r}",
-        )
+
+        fail_msg = f"for stopped event {event_body!r}"
+        self.test_case.assertRegex(description, expected_description, fail_msg)
 
         if expected_text is not None:
-            self.test_case.assertIsNotNone(
-                event_body.text, f"stopped event text description {event_body}"
-            )
+            self.test_case.assertIsNotNone(event_body.text, fail_msg)
             text = cast(str, event_body.text)
-            self.test_case.assertRegex(
-                text,
-                expected_text,
-                f"for stopped event {event_body!r}",
-            )
+            self.test_case.assertRegex(text, expected_text, fail_msg)
+
         return stopped_event
 
     def verify_process_exited(
@@ -1368,11 +1256,9 @@ class DAPTestSession(Session):
     ):
         message = after if after is not None else self.last_response()
         event = self.wait_for_exited(after=message)
-        self.test_case.assertEqual(
-            event.body.exitCode,
-            exitCode,
-            msg=f"expect exitCode == '{exitCode}' for '{event.body}'",
-        )
+
+        fail_msg = f"expect exitCode == '{exitCode}' for '{event.body}'"
+        self.test_case.assertEqual(event.body.exitCode, exitCode, fail_msg)
 
         self.verify_reverse_process_exited(exitCode)
         return event
@@ -1414,9 +1300,9 @@ class DAPTestSession(Session):
         """ThreadContext for the thread that last raised a StoppedEvent."""
         return ThreadContext(self.stopped_thread_id, self)
 
-    def current_frame(self) -> FrameContext:
+    def current_top_frame(self, thread_id: Optional[int]) -> FrameContext:
         """Top FrameContext of the currently stopped thread."""
-        return self.current_thread().top_frame()
+        return self.get_thread_context(thread_id).top_frame()
 
     def get_completions(self, text: str, frameId: Optional[int]):
         def code_units(input: str) -> int:
@@ -1435,7 +1321,73 @@ class DAPTestSession(Session):
         response = self.request_and_respond(info_args)
         return response.body
 
-    def disconnect(
+    def do_restart(self, arguments: Optional[Union[LaunchArgs, AttachArgs]] = None, /):
+        restart_args = RestartArgs(arguments)
+        return self.request_and_respond(restart_args)
+
+    def send_disassemble(
+        self,
+        memoryReference: str,
+        instructionOffset: int = -50,
+        instructionCount: int = 200,
+        resolveSymbols: bool = True,
+    ):
+        dis_args = DisassembleArgs(
+            memoryReference=memoryReference,
+            instructionOffset=instructionOffset,
+            instructionCount=instructionCount,
+            resolveSymbols=resolveSymbols,
+        )
+        return self.request_and_respond(dis_args).body.instructions
+
+    def read_memory(
+        self, memoryReference: str, count: int, offset: Optional[int] = None
+    ):
+        args = ReadMemoryArgs(
+            memoryReference=memoryReference, offset=offset, count=count
+        )
+        handle = self.send_request(args)
+        return self.get_response_or_error(handle)
+
+    def write_memory(
+        self,
+        memoryReference: str,
+        value: Optional[int] = None,
+        *,
+        offset: Optional[int] = None,
+        allowPartial: bool = False,
+    ):
+        """Send a `writeMemory` request encoding `value` as little-endian bytes.
+
+        This function accepts data in decimal and hexadecimal format,
+        converts it to a Base64 string, and send it to the DAP,
+        which expects Base64 encoded data.
+        """
+        if value is None:
+            data = ""
+        else:
+            # (bit_length + 7 (rounding up to nearest byte) ) //8 = converts to bytes.
+            byte_length = (value.bit_length() + 7) // 8
+            val_bytes = value.to_bytes(byte_length, "little")
+            data = base64.b64encode(val_bytes).decode()
+
+        before_request = self.last_response()
+        write_args = WriteMemoryArgs(
+            memoryReference=memoryReference,
+            data=data,
+            offset=offset,
+            allowPartial=allowPartial,
+        )
+        handle = self.send_request(write_args)
+        response = self.get_response_or_error(handle)
+
+        # Check we sent invalidated event.
+        if response.success and self._init_args.supportsInvalidatedEvent:
+            invalidated = self.wait_for_invalidated(after=before_request)
+            self.test_case.assertEqual(invalidated.body.areas, ["all"])
+        return response
+
+    def do_disconnect(
         self, restart: Optional[bool] = None, terminateDebuggee: Optional[bool] = None
     ):
         args = DisconnectArgs(restart=restart, terminateDebuggee=terminateDebuggee)

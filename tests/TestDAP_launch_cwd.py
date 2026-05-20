@@ -4,7 +4,7 @@ Test lldb-dap launch request.
 import os
 
 from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldb_dap.dap_types import ExitedEvent, LaunchArgs
+from lldb_dap.dap_types import LaunchArgs
 
 
 class TestDAP_launch_cwd(DAPTestCaseBase):
@@ -35,14 +35,14 @@ int main(int argc, char const *argv[], char const *envp[]) {
 }"""
 
     def test(self):
-        program = self.create_and_compile_file(self.TEST_PROGRAM)
+        program = self.getBuildArtifact("a.out")
         program_parent_dir = os.path.realpath(os.path.dirname(os.path.dirname(program)))
-        self.session.launch_using_config(
-            LaunchArgs(program=program, cwd=program_parent_dir)
-        )
-        self.session.verify_process_exited()
+        session = self.build_and_create_session()
+        session.launch_using_config(LaunchArgs(program=program, cwd=program_parent_dir))
+        session.verify_process_exited()
+
         # Now get the STDOUT and verify our program argument is correct
-        output = self.session.get_stdout()
+        output = session.get_stdout()
         self.assertTrue(output and len(output) > 0, "expect program output")
         lines = output.splitlines()
         found = False

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import bisect
+import contextlib
 import itertools
 import json
 import os
@@ -108,12 +109,18 @@ class DebugAdapter:
 
         # Setup the process args.
         process_args = [self.executable]
+        self._connection_count = 0
 
         # TODO: remove this later.
         if executable.endswith("lldb-dap"):
             process_args.append("--no-lldbinit")
             process_args.extend(
-                ["--pre-init-command", "log enable lldb event -T -f dap_event.log"]
+                [
+                    "--pre-init-command",
+                    "log enable lldb event -T -f dap_event.log",
+                    "--pre-init-command",
+                    "log enable lldb conn -f dap_conn.log",
+                ]
             )
         process_args.extend(opts.args)
 
@@ -140,7 +147,6 @@ class DebugAdapter:
             stderr=subprocess.PIPE,
             env=process_env,
             cwd=opts.cwd,
-            bufsize=0,
         )
         assert self.is_alive, "expected running process"
 
@@ -149,12 +155,17 @@ class DebugAdapter:
         else:
             self._listening_uri = None
 
-    def create_transport(self) -> Transport:
+    def create_connection(self) -> DAPConnection:
         if self.is_server:
             assert self._listening_uri is not None
-            return _SocketTransport(uri=self._listening_uri)
+            transport = _SocketTransport(uri=self._listening_uri)
+        else:
+            if self._connection_count > 0:
+                raise DAPError("Cannot create multiple connections in stdio mode")
+            transport = _StdioTransport(self._process)
 
-        return _StdioTransport(self._process)
+        self._connection_count += 1
+        return DAPConnection(transport)
 
     @property
     def is_server(self):
@@ -187,6 +198,17 @@ class DebugAdapter:
             raise AttributeError("expected the process stdout to be a PIPE")
 
         out = process_stdout.readline().decode()
+        if not out:
+            # Check if there is a message in stderr.
+            err = ""
+            with contextlib.suppress(Exception):
+                if process_stderr := self.process.stderr:
+                    err = process_stderr.read().decode()
+            raise EOFError(
+                f"Unexpected End of file for process {self.process.args},\n"
+                f"process stderr: {err}"
+            )
+
         if not out.startswith(expected_prefix):
             raise ValueError(
                 "lldb-dap failed to print listening address, "
@@ -272,6 +294,11 @@ class EventHistory:
                 waiters so they can see the underlying cause.
         """
         with self._new_event_condition:
+            if self._is_closed:
+                raise DAPError(
+                    f"history already closed with exception {self._closed_reason}"
+                    f"trying to closed again with {reason}"
+                )
             self._is_closed = True
             self._closed_reason = reason
             self._new_event_condition.notify_all()
@@ -418,10 +445,11 @@ class EventHistory:
         assert isinstance(event_types, tuple), "expected a tuple of events."
         assert len(event_types) > 0, "expected at least one event to wait for."
 
-        def make_timeout_msg():
+        def make_error_msg(is_timeout: bool = True):
             event_names = [x.__name__ for x in event_types]
+            prefix = "Timed out after {timeout}s" if is_timeout else "Error while"
             err_msg = (
-                f"Timed out after {timeout}s waiting for any event that matches: {event_names}"
+                f"{prefix} waiting for any event that matches: {event_names}"
                 f" after sequence: {after_seq}"
             )
             if timeout_msg:
@@ -443,13 +471,16 @@ class EventHistory:
             return matches
 
         timeout = timeout if timeout is not None else self._timeout
-        event = self.__wait_until(
-            is_event_and_matches_condition, after_seq=after_seq, timeout=timeout
-        )
+        try:
+            event = self.__wait_until(
+                is_event_and_matches_condition, after_seq=after_seq, timeout=timeout
+            )
+        except DAPError as err:
+            err.args = (err.args[0] + make_error_msg(False),) + err.args[1:]
+            raise
 
         if event is None:
-            error_msg = make_timeout_msg()
-            raise TimeoutError(error_msg)
+            raise TimeoutError(make_error_msg())
 
         # Sanity check.
         assert isinstance(event, event_types)
@@ -493,7 +524,7 @@ class EventHistory:
 
 
 def redirect_stream(
-    in_stream: IO[str], out_stream: IO[str], thread_name: str
+    in_stream: IO[bytes], out_stream: IO[str], thread_name: str
 ) -> threading.Thread:
     """
     Creates a new thread that redirects stream from `in_stream` to
@@ -503,11 +534,15 @@ def redirect_stream(
     Returns a thread that redirects the stream.
     """
 
-    def read_loop(in_stream: IO[str], out_stream: IO[str]):
-        # TODO: note this is buffered by new line.
-        for line in in_stream:
-            out_stream.write(line)
-            out_stream.flush()
+    def read_loop(in_stream: IO[bytes], out_stream: IO[str]):
+        with contextlib.suppress(OSError, ValueError):  # Nothing to report.
+            while True:
+                chunk = in_stream.read(4096)
+                if not chunk:
+                    break
+
+                out_stream.write(chunk.decode())
+                out_stream.flush()
 
     thread_name = f"redirect_{thread_name}"
     redirect_thread = threading.Thread(
@@ -529,10 +564,13 @@ class Transport(Protocol):
             adapter is already running and exposes connection URI.
     """
 
-    def send(self, data: bytes):
+    def write(self, data: bytes):
         ...
 
-    def receive(self, n: int) -> bytes:
+    def read(self, n: int) -> bytes:
+        ...
+
+    def readline(self) -> bytes:
         ...
 
     def close(self):
@@ -558,7 +596,7 @@ class MessageHandler:
     on_response: Callable[[RawMessage], None]
     on_event: Callable[[RawMessage], None]
     on_reverse_request: Callable[[RawMessage], None]
-    on_error: Optional[Callable[[Exception], None]] = lambda _: None
+    on_close: Optional[Callable[[Optional[Exception]], None]] = lambda _: None
 
 
 class DAPConnection:
@@ -576,17 +614,17 @@ class DAPConnection:
 
         self._pending_requests: dict[int, futures.Future[RawMessage]] = {}
         self._sent_requests: dict[int, RawMessage] = {}
+        self._received_messages: List[RawMessage] = []
 
-        self._buffer = bytearray()
-        self._running = threading.Event()
-        self._running.clear()
+        # event to sync when the Connection start listening for messages.
+        self._is_ready = threading.Event()
+        self._is_ready.clear()
 
     def start(self, handler: MessageHandler):
-        self._running.set()
+        self._is_ready.set()
         self._read_loop(handler)
 
     def stop(self):
-        self._running.clear()
         if self._transport.is_alive:
             self._transport.close()
 
@@ -603,15 +641,16 @@ class DAPConnection:
         response_future: futures.Future[RawMessage] = futures.Future()
         self._pending_requests[seq] = response_future
         request_dict = request.to_dict()
-        self._sent_requests[seq] = request_dict
         self.send_message(request_dict)
+        self._sent_requests[seq] = request_dict
 
     def send_message(self, message: dict):
         assert self.is_alive(), f"'{self.__class__.__name__}' is not running"
         data = DAPConnection.encode_message(message)
-        self._transport.send(data)
+        self._transport.write(data)
 
     def get_response(self, seq: int, timeout: float) -> RawMessage:
+        assert self._is_ready.is_set(), f"read loop not running call 'start'"
         if seq not in self._sent_requests:
             raise DAPError(f"no sent request for sequence: {seq}.")
         if seq not in self._pending_requests:
@@ -627,7 +666,8 @@ class DAPConnection:
             return response
         except (TimeoutError, futures.TimeoutError):
             raise TimeoutError(
-                f"Request '{sent_request['command']}' timed out after {timeout}s\n\t{sent_request}"
+                f"Request '{sent_request['command']}' timed out after {timeout}s"
+                f"\n\t{sent_request=}"
             )
         except ConnectionError as e:
             raise DAPError(
@@ -635,7 +675,10 @@ class DAPConnection:
             ) from e
 
     def is_alive(self):
-        return self._running.is_set() and self._transport.is_alive
+        return self._transport.is_alive
+
+    def wait_until_alive(self, timeout: float):
+        return self._is_ready.wait(timeout)
 
     @staticmethod
     def validate_response(request: RawMessage, response: RawMessage) -> None:
@@ -649,23 +692,33 @@ class DAPConnection:
             )
 
     def _read_loop(self, handler: MessageHandler):
-        while self.is_alive():
-            try:
-                data = self._transport.receive(4096)
-                if not data:
-                    break
-                self._buffer += data
-                self._process_buffer(handler)
-            except Exception as e:
-                for future in self._pending_requests.values():
-                    if future.done():
-                        continue
+        try:
+            while self.is_alive():
+                try:
 
-                    future.set_exception(ConnectionError(f"Connection closed: \n{e}"))
+                    message = self._read_message()
+                    if not message:
+                        break
 
-                if on_error := handler.on_error:
-                    on_error(e)
-                return
+                    self._received_messages.append(message)
+                    self._on_message(message, handler)
+                except Exception as e:
+                    for future in self._pending_requests.values():
+                        if future.done():
+                            continue
+
+                        future.set_exception(e)
+
+                    self.stop()
+                    if on_close := handler.on_close:
+                        on_close(e)
+
+                    return
+            self.stop()
+            if on_close := handler.on_close:
+                on_close(None)
+        except Exception:
+            pass
 
     def _on_message(self, message: RawMessage, handler: MessageHandler):
         msg_type = message.get("type")
@@ -683,42 +736,45 @@ class DAPConnection:
         else:
             raise DAPError(f"Unknown message type: {msg_type}")
 
-    def _process_buffer(self, handler: MessageHandler) -> None:
-        """Process buffered data and extract messages"""
+    def _read_message(self):
         HEADER_TERMINATOR = b"\r\n\r\n"
-        HEADER_SEPARATOR = b"\r\n"
         CONTENT_LEN_PREFIX = b"Content-Length: "
+        buffer = bytearray()
 
         while True:
-            # Separate the headers from the message.
-            header_end = self._buffer.find(HEADER_TERMINATOR)
+            chunk = self._transport.readline()
+            if not chunk:
+                if buffer:
+                    raise EOFError(f"unexpected EOF when parsing header: {buffer}")
+                else:
+                    return None
+            buffer += chunk
+
+            header_end = buffer.find(HEADER_TERMINATOR)
             if header_end == -1:
-                break
+                continue
+            header = buffer[:header_end]
 
-            header = self._buffer[:header_end]
+            # Look for the Content-Length header.
             content_length = 0
-
-            # Look for Content-Length header.
-            for line in header.split(HEADER_SEPARATOR):
+            for line in header.split(b"\r\n"):
                 if line.startswith(CONTENT_LEN_PREFIX):
                     content_length = int(line[len(CONTENT_LEN_PREFIX) :])
                     break
             else:
-                raise DAPError(f"Invalid header: {header.decode('utf-8')}")
+                raise DAPError(f"Invalid header: {header}")
 
+            # Parse Content-Part.
             message_start = header_end + len(HEADER_TERMINATOR)
-            message_end = message_start + content_length
+            buffer = buffer[message_start:]
+            while len(buffer) < content_length:
+                chunk = self._transport.read(content_length - len(buffer))
+                if not chunk:
+                    raise EOFError(f"unexpected EOF when parsing message: {buffer}")
+                buffer += chunk
 
-            if len(self._buffer) < message_end:
-                # Wait for more data.
-                break
-
-            message_bytes = self._buffer[message_start:message_end]
-            self._buffer = self._buffer[message_end:]
-
-            # Forward the message.
-            message = json.loads(message_bytes.decode("utf-8"))
-            self._on_message(message, handler)
+            message = json.loads(buffer.decode("utf-8"))
+            return message
 
 
 class _StdioTransport:
@@ -732,33 +788,36 @@ class _StdioTransport:
         self._stdin = stdin
         self._stdout = stdout
 
-        assert self.is_alive
         self._is_closed = False
+        assert self.is_alive
 
-    def send(self, data: bytes):
+    def write(self, data: bytes):
         self._stdin.write(data)
         self._stdin.flush()
 
-    def receive(self, n: int) -> bytes:
+    def read(self, n: int) -> bytes:
         return self._stdout.read(n)
+
+    def readline(self):
+        return self._stdout.readline()
 
     def close(self):
         if self._is_closed:
             return
-
-        self._stdin.flush()
-        self._stdin.close()
-        self._stdout.close()
         self._is_closed = True
+
+        # Close stdin only. In Python3.8, closing stdout from main thread while the
+        # reader thread is inside BufferedReader.read() will crash the interpreter.
+        # The stdout cleanup happens via DebugAdapter.kill() when we kill the process
+        with contextlib.suppress(OSError, ValueError):
+            self._stdin.flush()
+            self._stdin.close()
 
     @property
     def is_alive(self):
-        is_alive = (
-            self._process.poll() is None
-            and self._stdin.closed is False
-            and self._stdout.closed is False
-        )
-        return is_alive
+        if self._is_closed:
+            return False
+        return self._process.poll() is None
 
 
 class _SocketTransport:
@@ -775,35 +834,42 @@ class _SocketTransport:
         else:
             raise ValueError(f"invalid URI '{self.uri}' for socket")
 
-        self._is_closed = False
-        self._reader = self._socket.makefile("rb", buffering=0)
-        self._writer = self._socket.makefile("wb", buffering=0)
+        self._reader = self._socket.makefile("rb", buffering=-1)
+        self._writer = self._socket.makefile("wb", buffering=-1)
 
+        self._is_closed = False
         assert self.is_alive
 
-    def send(self, data: bytes):
+    def write(self, data: bytes):
         self._writer.write(data)
         self._writer.flush()
 
-    def receive(self, n: int) -> bytes:
+    def read(self, n: int) -> bytes:
         return self._reader.read(n)
+
+    def readline(self):
+        return self._reader.readline()
 
     def close(self):
         if self._is_closed:
             return
-
-        self._writer.flush()
-        self._writer.close()
-        self._reader.close()
-        self._socket.shutdown(socket.SHUT_RDWR)
-        self._socket.close()
         self._is_closed = True
+
+        with contextlib.suppress(OSError, ValueError):
+            self._writer.flush()
+
+        if self._socket.fileno() != -1:
+            self._socket.shutdown(socket.SHUT_RDWR)
+
+        self._writer.close()
+        self._socket.close()
 
     @property
     def is_alive(self):
+        if self._is_closed:
+            return False
         try:
             _ = self._socket.getpeername()
-            is_closed = self._reader.closed or self._writer.closed
-            return not is_closed
         except socket.error:
             return False
+        return True

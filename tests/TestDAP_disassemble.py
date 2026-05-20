@@ -5,8 +5,10 @@ Test lldb-dap disassemble request
 
 import unittest
 
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase, line_number
 from lldb_dap.dap_types import LaunchArgs
+from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.decorators import skipIfWindows
+from lldbsuite.test.lldbtest import line_number
 
 
 @unittest.skip("NOT FULLY IMPLEMENTED")
@@ -43,11 +45,11 @@ int main(void) {
 
 """
 
-    # @skipIfWindows TODO: Fix
+    @skipIfWindows
     def test_disassemble(self):
         """Tests the 'disassemble' request."""
         program = self.create_test_program_with_name("main.c")
-        session = self.session
+        session = self.build_and_create_session()
         source = "main.c"
         bp_line_no = line_number(source, "// breakpoint 1")
         with session.configure(LaunchArgs(program)) as ctx:
@@ -81,7 +83,7 @@ int main(void) {
 
         self.continue_to_exit()
 
-    # @skipIfWindows TODO:
+    @skipIfWindows
     def test_disassemble_backwards(self):
         """
         Tests the 'disassemble' request with a backwards disassembly range.

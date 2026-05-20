@@ -19,6 +19,7 @@ from lldb_dap.dap_types import (
     CapabilitiesEvent,
     ContinueArgs,
     DAPError,
+    DisconnectArgs,
     ErrorResponse,
     Event,
     ExitedEvent,
@@ -124,7 +125,7 @@ class _DAPSessionState:
 
     @_synchronized
     def set_initialized(self, val: bool):
-        self._initialized = True
+        self._initialized = val
 
     @property
     @_synchronized
@@ -191,20 +192,20 @@ class Session:
 
         self._event_history = EventHistory(self._message_timeout)
         self._adapter = adapter
-        self._connection = DAPConnection(adapter.create_transport())
+        self._connection = adapter.create_connection()
 
-        def on_connection_error(err: Exception):
+        def on_connection_closed(err: Optional[Exception]):
             # We want fail early if is already a request for wait_for_X_event.
-            self._event_history.close(err)
+            self._event_history.close(err or Exception("Session Ended."))
 
         msg_handler = MessageHandler(
             on_response=self._on_protocol_response,
             on_event=self._on_protocol_event,
             on_reverse_request=self._on_protocol_reverse_request,
-            on_error=on_connection_error,
+            on_close=on_connection_closed,
         )
         self._read_thread = threading.Thread(
-            target=self._connection.start, args=[msg_handler]
+            target=self._connection.start, args=[msg_handler], name="Read Thread"
         )
 
         # Function Mappings
@@ -215,7 +216,7 @@ class Session:
 
         # Reverse Requests
         self._reverse_requests: list[Request] = []
-        self._reverse_process: Optional[subprocess.Popen[str]] = None
+        self._reverse_process: Optional[subprocess.Popen[bytes]] = None
         # TODO: add some explanation on what this field is used for.
         self._reverse_process_io_threads: list[threading.Thread] = []
 
@@ -247,14 +248,19 @@ class Session:
     def start(self) -> None:
         """Start the connection"""
         self._read_thread.start()
+        # Synchronize with the connection.
+        self._connection.wait_until_alive(self._message_timeout)
 
     def _on_protocol_response(self, message: RawMessage) -> None:
         """Handle response message"""
         self._test_message_log.write(f"dap <- client {json.dumps(message)}\n")
-        if message["command"] == InitializeArgs.command_:
+        command = message.get("command")
+        if command == InitializeArgs.command_:
             if raw_capabilities := message.get("body"):
                 init_capabilities = dict_to_message(Capabilities, raw_capabilities)
                 self._state.update_capabilities(init_capabilities)
+        if message["command"] == DisconnectArgs.command_:
+            self._connection.stop()
 
     def _on_protocol_event(self, message: RawMessage) -> None:
         """Handle event message"""
@@ -276,12 +282,13 @@ class Session:
             category.write(event.body.output)
         elif isinstance(event, ExitedEvent):
             # If we have a 'runInTerminal' process it must have exited.
-            self.verify_reverse_process_exited()
             if self._reverse_process:
-                # End all the the debuggee redirect threads.
+                self.verify_reverse_process_exited()
+
+                # Join the redirect threads here. so any tail bytes are flushed
+                # into the StringIOs before the test reads them.
                 for thread in self._reverse_process_io_threads:
-                    thread.join()
-                self._reverse_process_io_threads = []
+                    thread.join(self._message_timeout)
 
         # Store in general event queue
         self._event_history.record(event)
@@ -312,7 +319,6 @@ class Session:
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            universal_newlines=True,
         )
         return_code = process.poll()
         if return_code is not None:
@@ -458,26 +464,37 @@ class Session:
             if proc_exit_code is None:
                 raise DAPError(
                     f"process is still running, "
-                    f"process: pid: '{process.pid}', args: {process.args}"
+                    f"for process pid: '{process.pid}', args: {process.args}"
                 )
 
             if exit_code is not None:
-                assert (
-                    proc_exit_code == exit_code
-                ), f"for process: pid: '{process.pid}', args: {process.args}"
+                assert proc_exit_code == exit_code, (
+                    f"{proc_exit_code=} != expected_exit_code={exit_code} "
+                    f"for process pid: '{process.pid}', args: {process.args}"
+                )
 
     def stop(self) -> None:
         self._connection.stop()
-        self._event_history.close(DAPError("Session Ended."))
 
         if self._read_thread.is_alive():
-            self._read_thread.join()
+            self._read_thread.join(self._message_timeout)
+
+        # If the runInTerminal subprocess is still alive the redirect threads are
+        # blocked in read. Kill the process to stop thre redirect threads.
+        reverse_process = self._reverse_process
+        if (reverse_process := reverse_process) and reverse_process.poll() is None:
+            reverse_process.terminate()
+            try:
+                reverse_process.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                reverse_process.kill()
+
+        for thread in self._reverse_process_io_threads:
+            thread.join(timeout=self._message_timeout)
 
         if not self._test_message_log.closed:
             self._test_message_log.flush()
             self._test_message_log.close()
-
-        self.verify_reverse_process_exited()
 
     def __enter__(self):
         self.start()

@@ -1,14 +1,5 @@
-from dataclasses import is_dataclass
-import time
-from typing import cast
+from lldb_dap.dap_types import LaunchArgs
 from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldb_dap.dap_types import (
-    Event,
-    ExitedEvent,
-    LaunchArgs,
-    OutputEvent,
-    OutputCategory,
-)
 
 
 class TestDAP_launch_args(DAPTestCaseBase):
@@ -38,17 +29,17 @@ int main(int argc, char const *argv[], char const *envp[]) {
 }"""
 
     def test(self):
-        test_program = self.create_and_compile_file(self.TEST_PROGRAM)
-
+        program = self.getBuildArtifact("a.out")
         args = ["one", "with space", "'with single quotes'", '"with double quotes"']
-        launch_args = LaunchArgs(program=test_program, args=args)
-        process_event, _ = self.session.launch_using_config(launch_args)
-        self.session.verify_process_exited(after=process_event)
 
-        output = self.session.get_stdout()
+        session = self.build_and_create_session()
+        process_event = session.launch_using_config(LaunchArgs(program, args=args))
+        session.verify_process_exited(after=process_event)
+
+        # Now get the STDOUT and verify our arguments got passed correctly
+        output = session.get_stdout()
         self.assertTrue(output and len(output) > 0, "expect program output")
-        output = output.splitlines()
-        lines = output
+        lines = output.splitlines()
         # Skip the first argument that contains the program name
         lines.pop(0)
         # Make sure arguments we specified are correct

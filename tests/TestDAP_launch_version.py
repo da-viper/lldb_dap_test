@@ -1,9 +1,7 @@
-import unittest
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase, line_number
+from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldb_dap.dap_types import LaunchArgs
 
 
-# TODO: fix the alias for $__version
 class TestDAP_launch_version(DAPTestCaseBase):
     """
     Tests that "initialize" response contains the "version" string the same
@@ -24,14 +22,16 @@ int main(int argc, char const *argv[], char const *envp[]) {
 """
 
     def test(self):
-        source = str(self.test_dir / "main.cpp")
-        program = self.create_and_compile_file(self.TEST_PROGRAM, filename=source)
-        session = self.session
+        program = self.getBuildArtifact("a.out")
+        session = self.build_and_create_session()
 
-        session.launch_using_config(LaunchArgs(program=program, stopOnEntry=True))
+        process_event = session.launch_using_config(
+            LaunchArgs(program=program, stopOnEntry=True)
+        )
+        session.verify_stopped_on_entry(after=process_event)
 
         version_eval_output = session.evaluate("`version", context="repl").result
-        version_string = session.capabilities().lldb_version or ""
+        version_string = self.expect_is_not_none(session.capabilities().lldb_version)
 
         self.assertEqual(
             version_eval_output.splitlines(),

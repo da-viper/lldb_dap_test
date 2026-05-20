@@ -2,11 +2,9 @@
 Test lldb-dap attach commands
 """
 
-import time
-from typing import cast
-
 from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldb_dap.dap_types import AttachArgs, PauseArgs, StoppedReason
+from lldbsuite.test.decorators import skipIfNetBSD
 
 ATTACH_H = r"""
 #ifndef LLDB_TEST_ATTACH_H
@@ -86,7 +84,7 @@ lldb_enable_attach();
 }
 """
 
-    # @skipIfNetBSD  # Hangs on NetBSD as well TODO:
+    @skipIfNetBSD  # Hangs on NetBSD as well
     def _test_commands(self):
         # TODO: this test is still flaky and it is not because of dap but the pause
         # I don't need to stop the process again after a pause.
@@ -110,9 +108,9 @@ lldb_enable_attach();
         "terminateCommands" are a list of LLDB commands that get executed when
         the debugger session terminates.
         """
-        session = self.session
         self.create_file(ATTACH_H, "attach.h")
-        program = self.create_test_program_with_name("main.cpp")
+        program = self.getBuildArtifact("a.out")
+        session = self.build_and_create_session()
 
         # Here we just create a target and launch the process as a way to test
         # if we are able to use attach commands to create any kind of a target
@@ -128,7 +126,7 @@ lldb_enable_attach();
         exitCommands = ["expr 2+3", "expr 3+4"]
         terminateCommands = ["expr 4+2"]
 
-        process_event, _ = session.attach_using_config(
+        process_event = session.attach_using_config(
             AttachArgs(
                 program=program,
                 attachCommands=attachCommands,
@@ -153,8 +151,7 @@ lldb_enable_attach();
         session.verify_commands("postRunCommands", output, postRunCommands)
 
         stopped_event = session.verify_stopped_on_entry(after=process_event)
-        self.assertIsNotNone(stopped_event.body.threadId)
-        stopped_thread_id = cast(int, stopped_event.body.threadId)
+        stopped_thread_id = self.expect_is_not_none(stopped_event.body.threadId)
 
         output = session.collect_console_until(stopCommands[-1], after=stopped_event)
         session.verify_commands("stopCommands", output.seen_texts, stopCommands)
@@ -193,8 +190,8 @@ lldb_enable_attach();
         selected target with a valid process.
         """
         self.create_file(ATTACH_H, "attach.h")
-        program = self.create_test_program_with_name("main.cpp")
-        session = self.session
+        program = self.getBuildArtifact("a.out")
+        session = self.build_and_create_session()
 
         attachCommands = ['script print("oops, forgot to attach to a process...")']
         attach_args = AttachArgs(
@@ -221,8 +218,8 @@ lldb_enable_attach();
         attach, are run when the debugger is disconnected.
         """
         self.create_file(ATTACH_H, "attach.h")
-        program = self.create_test_program_with_name("main.cpp")
-        session = self.session
+        program = self.getBuildArtifact("a.out")
+        session = self.build_and_create_session()
 
         # Here we just create a target and launch the process as a way to test
         # if we are able to use attach commands to create any kind of a target
@@ -232,7 +229,7 @@ lldb_enable_attach();
             "process launch --stop-at-user-entry",
         ]
         terminateCommands = ["history -c 1"]
-        process_event, _ = session.attach_using_config(
+        process_event = session.attach_using_config(
             AttachArgs(
                 program=program,
                 attachCommands=attachCommands,
@@ -241,7 +238,7 @@ lldb_enable_attach();
         )
         # Once it's disconnected the console should contain the
         # "terminateCommands"
-        session.disconnect(terminateDebuggee=True)
+        session.do_disconnect(terminateDebuggee=True)
         output = session.collect_console_until(
             terminateCommands[0], after=process_event
         )

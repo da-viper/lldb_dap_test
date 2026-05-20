@@ -3,13 +3,14 @@ Test lldb-dap breakpointLocations request
 """
 
 
+import os
 import sys
 from typing import List, Tuple
 
-import os
-
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase, line_number
 from lldb_dap.dap_types import BreakpointLocation, LaunchArgs
+from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.decorators import skipIfWindows
+from lldbsuite.test.lldbtest import line_number
 
 
 class TestDAP_breakpointLocations(DAPTestCaseBase):
@@ -103,14 +104,14 @@ int main(int argc, char const *argv[]) {
         )
         # TODO: END ---
 
-    # @skipIfWindows TODO:
+    @skipIfWindows
     def test_column_breakpoints(self):
         self.build()
         main_path = os.path.realpath(self.getSourcePath("main-copy.cpp"))
         """Test retrieving the available breakpoint locations."""
         program = self.getBuildArtifact("a.out")
-        session = self.session
-        process_event, _ = session.launch_using_config(
+        session = self.build_and_create_session()
+        process_event = session.launch_using_config(
             LaunchArgs(program, stopOnEntry=True)
         )
         session.verify_stopped_on_entry(after=process_event)

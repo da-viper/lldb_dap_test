@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 test_build_dir: Path = Path(os.getcwd()) / "builds"
+cmake_build_type: str = "release"
 
 def get_yaml2obj_path() -> str:
     yaml2obj = shutil.which("yaml2obj") 

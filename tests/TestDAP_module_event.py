@@ -3,8 +3,9 @@ import sys
 import unittest
 
 
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase, line_number
+from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.lldbtest import line_number
 
 OTHER_C = r"""
 extern int foo(int x) {
@@ -42,6 +43,7 @@ int main(int argc, char const *argv[]) {
 """
 
     def test_module_event(self):
+        # TODO: move this to build
         other = self.create_file(OTHER_C, "other.c")
         shared_lib_name = "libother.so" if sys.platform == "linux" else "libother.dylib"
         program_path = self.create_file(self.TEST_PROGRAM, "main.cpp")
@@ -69,7 +71,7 @@ int main(int argc, char const *argv[]) {
                 program,
             ]
         )
-        session = self.session
+        session = self.create_session()
 
         source = "main.cpp"
         breakpoint1_line = line_number(source, "// breakpoint 1")

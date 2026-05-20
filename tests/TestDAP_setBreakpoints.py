@@ -2,17 +2,19 @@
 Test lldb-dap setBreakpoints request
 """
 
-from lldb_dap.dap_types import SourceBreakpoint
-from lldb_dap.dap_types import DAPTestGetTargetBreakpointsArgs
-from typing import Dict
-import unittest
-from lldb_dap.dap_types import InitializedEvent
-from lldb_dap.dap_types import LaunchArgs
-from lldb_dap.lldb_dap_testcase import line_number
+import os
 import shutil
 import sys
+from typing import Dict
+
+from lldb_dap.dap_types import (
+    DAPTestGetTargetBreakpointsArgs,
+    LaunchArgs,
+    SourceBreakpoint,
+)
 from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-import os
+from lldbsuite.test.decorators import skipIfWindows
+from lldbsuite.test.lldbtest import line_number
 
 
 class TestDAP_setBreakpoints(DAPTestCaseBase):
@@ -116,7 +118,7 @@ int main(int argc, char const *argv[]) {
         )
         # TODO: END ---
 
-    # @skipIfWindows TODO:
+    @skipIfWindows
     def test_source_map(self):
         """
         This test simulates building two files in a folder, and then moving
@@ -124,7 +126,7 @@ int main(int argc, char const *argv[]) {
         with the corresponding source maps to have breakpoints and frames
         working.
         """
-        self.build()
+        session = self.build_and_create_session()
         other_basename = "other-copy.c"
         other_path = self.getBuildArtifact(other_basename)
 
@@ -150,7 +152,7 @@ int main(int argc, char const *argv[]) {
             (source_folder, new_main_folder),
             (source_folder, new_other_folder),
         ]
-        session = self.session
+        session = session
         launch_handle = session.initialize_and_launch(
             LaunchArgs(program, sourceMap=source_map)
         )
@@ -213,7 +215,7 @@ int main(int argc, char const *argv[]) {
         session.set_source_breakpoints(new_other_path, [])
         session.continue_to_exit()
 
-    # @skipIfWindows TODO:
+    @skipIfWindows
     def test_set_and_clear(self):
         """Tests setting and clearing source file and line breakpoints.
         This packet is a bit tricky on the debug adapter side since there
@@ -227,7 +229,7 @@ int main(int argc, char const *argv[]) {
         and makes sure things happen correctly. It doesn't test hitting
         breakpoints and the functionality of each breakpoint, like
         'conditions' and 'hitCondition' settings."""
-        self.build()
+        session = self.build_and_create_session()
         first_line = line_number("main.cpp", "break 12")
         second_line = line_number("main.cpp", "break 13")
         third_line = line_number("main.cpp", "break 14")
@@ -237,7 +239,6 @@ int main(int argc, char const *argv[]) {
         # without launching or attaching to a process, so we must start a
         # process in order to be able to set breakpoints.
         program = self.getBuildArtifact("a.out")
-        session = self.session
         session.initialize_and_launch(LaunchArgs(program))
 
         # Set 3 breakpoints and verify that they got set correctly
@@ -358,12 +359,12 @@ int main(int argc, char const *argv[]) {
             self.assertIn(line, lines, "line expected in lines array")
             self.assertTrue(breakpoint.verified, "expect breakpoint still verified")
 
-    # @skipIfWindows TODO:
+    @skipIfWindows
     def test_clear_breakpoints_unset_breakpoints(self):
         """Test clearing breakpoints like test_set_and_clear, but clear
         breakpoints by omitting the breakpoints array instead of sending an
         empty one."""
-        self.build()
+        session = self.build_and_create_session()
         lines = [
             line_number("main.cpp", "break 12"),
             line_number("main.cpp", "break 13"),
@@ -373,7 +374,6 @@ int main(int argc, char const *argv[]) {
         # without launching or attaching to a process, so we must start a
         # process in order to be able to set breakpoints.
         program = self.getBuildArtifact("a.out")
-        session = self.session
         launch_handle = session.initialize_and_launch(LaunchArgs(program))
         session.ensure_initialized()
 
@@ -408,15 +408,14 @@ int main(int argc, char const *argv[]) {
         session.get_response(launch_handle)
         session.verify_process_exited()
 
-    # @skipIfWindows TODO:
+    @skipIfWindows
     def test_functionality(self):
         """Tests hitting breakpoints and the functionality of a single
         breakpoint, like 'conditions' and 'hitCondition' settings."""
-        self.build()
+        session = self.build_and_create_session()
         loop_line = line_number("main.cpp", "// break loop")
 
         program = self.getBuildArtifact("a.out")
-        session = self.session
 
         # Set a breakpoint at the loop line with no condition and no
         # hitCondition
@@ -476,14 +475,13 @@ int main(int argc, char const *argv[]) {
         session.set_source_breakpoints(self.main_path, [])
         session.continue_to_exit()
 
-    # @skipIfWindows TODO
+    @skipIfWindows
     def test_column_breakpoints(self):
         """Test setting multiple breakpoints in the same line at different columns."""
-        self.build()
+        session = self.build_and_create_session()
         loop_line = line_number("main.cpp", "// break loop")
 
         program = self.getBuildArtifact("a.out")
-        session = self.session
         launch_handle = session.initialize_and_launch(LaunchArgs(program))
         session.ensure_initialized()
 
@@ -535,12 +533,11 @@ int main(int argc, char const *argv[]) {
         session.set_source_breakpoints(self.main_path, [])
         session.continue_to_exit()
 
-    # @skipIfWindows TODO
+    @skipIfWindows
     def test_hit_multiple_breakpoints(self):
         """Test that if we hit multiple breakpoints at the same address, they
         all appear in the stop reason."""
-        self.build()
-        session = self.session
+        session = self.build_and_create_session()
         breakpoint_lines = [
             line_number("main.cpp", "// break non-breakpointable line"),
             line_number("main.cpp", "// before loop"),

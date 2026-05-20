@@ -3,8 +3,10 @@ Test lldb-dap setBreakpoints request
 """
 
 
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase, line_number
+from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.decorators import skipIfWindows
+from lldbsuite.test.lldbtest import line_number
 
 
 class TestDAP_step(DAPTestCaseBase):
@@ -40,15 +42,18 @@ __attribute__((always_inline)) inline void inlined_fn() { not_inlined_fn(); }
 #endif // OTHER_H
 """
 
-    # @skipIfWindows TODO:
+    def build(self, filename=None):
+        self.create_file(self.OTHER_H, "other.h")
+        self.create_test_program_with_name("main.cpp")
+
+    @skipIfWindows
     def test_step(self):
         """
         Tests the stepping in/out/over in threads.
         """
-        self.create_file(self.OTHER_H, "other.h")
-        program = self.create_test_program_with_name("main.cpp")
         source = self.getSourcePath("main.cpp")
-        session = self.session
+        program = self.getBuildArtifact("a.out")
+        session = self.build_and_create_session()
         breakpoint1_line = line_number(source, "// breakpoint 1")
         lines = [breakpoint1_line]
         # Set breakpoint in the thread function so we can step the threads
@@ -111,8 +116,8 @@ __attribute__((always_inline)) inline void inlined_fn() { not_inlined_fn(); }
         Test stepping over when the program counter is in another file.
         """
         self.create_file(self.OTHER_H, "other.h")
-        program = self.create_test_program_with_name("main.cpp")
-        session = self.session
+        program = self.getBuildArtifact("a.out")
+        session = self.build_and_create_session()
         source_ = "main.cpp"
         # TODO: should not use getSourcePath when porting
         source = self.getSourcePath("main.cpp")

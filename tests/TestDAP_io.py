@@ -2,7 +2,6 @@
 Test lldb-dap IO handling.
 """
 
-import sys
 
 from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldb_dap.utils import DebugAdapterOptions
@@ -26,7 +25,7 @@ class TestDAP_io(DAPTestCaseBase):
                 process.wait()
 
         # Execute the cleanup function during test case tear down.
-        self.addCleanup(cleanup)
+        self.addTearDownHook(cleanup)
 
         assert process.stdin is not None
         return process

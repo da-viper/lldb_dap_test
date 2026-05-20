@@ -2,10 +2,9 @@
 Test lldb-dap threads request
 """
 
-import sys
-
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase, line_number
 from lldb_dap.dap_types import LaunchArgs, StoppedReason, ThreadsArgs
+from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.lldbtest import line_number
 
 
 class TestDAP_threads(DAPTestCaseBase):
@@ -41,9 +40,8 @@ int main(int argc, char **argv) {
         In this case, the selected thread should be the thread that
         just hit the breakpoint, and not the first thread in the list.
         """
-        self.build()
+        session = self.build_and_create_session()
         program = self.getBuildArtifact("a.out")
-        session = self.session
         source = "main.cpp"
         breakpoint_line = line_number(source, "// break here")
 
@@ -81,9 +79,8 @@ int main(int argc, char **argv) {
         """
         Tests the support for custom thread formats.
         """
-        self.build()
+        session = self.build_and_create_session()
         program = self.getBuildArtifact("a.out")
-        session = self.session
         source = "main.cpp"
 
         # Set breakpoint in the thread function.

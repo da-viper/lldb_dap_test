@@ -57,9 +57,11 @@ def main():
     args = parser.parse_args()
     configuration.test_build_dir = Path(os.getcwd()) / "builds"
 
+    # Set environment variables for tests
     os.environ["DAP_ADAPTER_PATH"] = args.adapter_path
     os.environ["DAP_TIMEOUT"] = str(args.timeout)
 
+    # Discover and run tests
     if args.tests:
         # Run specific tests
         def to_module(name: str):
@@ -77,12 +79,14 @@ def main():
             start_dir=str(start_dir), pattern=args.pattern
         )
 
+    # Run tests
     result_c = DAPTestResult
     runner = unittest.TextTestRunner(
         verbosity=args.verbosity, failfast=args.failfast, resultclass=result_c
     )
     result = runner.run(suite)
 
+    # Exit with appropriate code
     sys.exit(0 if result.wasSuccessful() else 1)
 
 

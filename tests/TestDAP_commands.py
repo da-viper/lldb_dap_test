@@ -15,14 +15,15 @@ class TestDAP_commands(DAPTestCaseBase):
 """
 
     def test_command_directive_quiet_on_success(self):
-        program = self.create_test_program_with_name("main.cpp")
+        program = self.getBuildArtifact("a.out")
         command_quiet = (
             "settings set target.show-hex-variable-values-with-leading-zeroes false"
         )
         command_not_quiet = (
             "settings set target.show-hex-variable-values-with-leading-zeroes true"
         )
-        process_event, _ = self.session.launch_using_config(
+        session = self.build_and_create_session()
+        process_event = session.launch_using_config(
             LaunchArgs(
                 program,
                 initCommands=["?" + command_quiet, command_not_quiet],
@@ -31,8 +32,8 @@ class TestDAP_commands(DAPTestCaseBase):
                 exitCommands=["?" + command_quiet, command_not_quiet],
             )
         )
-        self.session.verify_process_exited(after=process_event)
-        full_output = self.session.get_console()
+        session.verify_process_exited(after=process_event)
+        full_output = session.get_console()
         self.assertNotIn(command_quiet, full_output)
         self.assertIn(command_not_quiet, full_output)
 
@@ -49,7 +50,9 @@ class TestDAP_commands(DAPTestCaseBase):
         )
         command_abort_on_error = "settings set foo bar"
         commands: list[str] = ["?!" + command_quiet, "!" + command_abort_on_error]
-        self.session.initialize_and_launch(
+
+        session = self.build_and_create_session()
+        session.initialize_and_launch(
             LaunchArgs(
                 program,
                 initCommands=commands if use_init_commands else None,
@@ -58,8 +61,8 @@ class TestDAP_commands(DAPTestCaseBase):
                 postRunCommands=commands if use_post_run_commands else None,
             )
         )
-        self.session.verify_configuration_done(use_post_run_commands)
-        full_output = self.session.get_console()
+        session.verify_configuration_done(use_post_run_commands)
+        full_output = session.get_console()
         self.assertNotIn(command_quiet, full_output)
         self.assertIn(command_abort_on_error, full_output)
 
@@ -81,7 +84,7 @@ class TestDAP_commands(DAPTestCaseBase):
             "settings set target.show-hex-variable-values-with-leading-zeroes false"
         )
         command_abort_on_error = "settings set foo bar"
-        session = self.session
+        session = self.build_and_create_session()
         session.initialize_sequence(session.initialize_args)
         with self.assertRaises(AssertionError):
             session.attach_and_configuration_done(

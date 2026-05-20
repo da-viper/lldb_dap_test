@@ -7,13 +7,15 @@ import re
 import shutil
 import sys
 
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase, line_number, skipif_linux
+from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldb_dap.dap_types import (
     CompileUnitsArgs,
     LaunchArgs,
     ModuleEvent,
     ModuleReason,
 )
+from lldbsuite.test.decorators import skipIfWindows, skipUnlessDarwin
+from lldbsuite.test.lldbtest import line_number
 
 
 class TestDAP_module(DAPTestCaseBase):
@@ -75,8 +77,7 @@ int main(int argc, char const *argv[]) {
             )
 
     def run_test(self, symbol_basename: str, expect_debug_info_size: bool):
-        self.build()
-        session = self.session
+        session = self.build_and_create_session()
         program_basename = "a.out.stripped"
         program = self.getBuildArtifact(program_basename)
         launch_handle = session.initialize_and_launch(LaunchArgs(program))
@@ -159,7 +160,7 @@ int main(int argc, char const *argv[]) {
 
         session.continue_to_exit()
 
-    # @skipIfWindows TODO:
+    @skipIfWindows
     def test_modules(self):
         """
         Mac or linux.
@@ -174,8 +175,7 @@ int main(int argc, char const *argv[]) {
             "a.out", expect_debug_info_size=platform.system() != "Darwin"
         )
 
-    # @skipUnlessDarwin TODO:
-    @skipif_linux()
+    @skipUnlessDarwin
     def test_modules_dsym(self):
         """
         Darwin only test with dSYM file.
@@ -185,15 +185,14 @@ int main(int argc, char const *argv[]) {
         """
         return self.run_test("a.out.dSYM", expect_debug_info_size=True)
 
-    # @skipIfWindows TODO:
+    @skipIfWindows
     def test_compile_units(self):
-        self.build()
-        session = self.session
+        session = self.build_and_create_session()
         program = self.getBuildArtifact("a.out")
         source = "main.cpp"
         main_source_path = self.getSourcePath(source)
-        breakpoint1_line = line_number(source, "// breakpoint 1")
         with session.configure(LaunchArgs(program)) as ctx:
+            breakpoint1_line = line_number(source, "// breakpoint 1")
             bp_ids = session.resolve_source_breakpoints(source, [breakpoint1_line])
         process_event = ctx.process_event()
 

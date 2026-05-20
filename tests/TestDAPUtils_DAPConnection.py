@@ -1,7 +1,7 @@
 import io
 import json
-from typing import List
 import unittest
+from typing import List
 
 from lldb_dap.dap_types import RawMessage
 from lldb_dap.utils import DAPConnection, MessageHandler, Transport
@@ -18,7 +18,7 @@ class EchoClient:
 class TestDAPUtils_DAPConnection(unittest.TestCase):
     """Something"""
 
-    def test_valid_responses_and_events(self):
+    def test_round_trip(self):
         received_messages = self.raw_data()
         transport = self.create_transport(received_messages)
         connection = DAPConnection(transport)
@@ -35,6 +35,20 @@ class TestDAPUtils_DAPConnection(unittest.TestCase):
         for actual, expected in zip(received_messages, expected_messages):
             self.assertEqual(actual, expected)
 
+    def test_encode_message_framing(self):
+        payload = {"type": "request", "seq": 1, "command": "initialize"}
+        data = DAPConnection.encode_message(payload)
+        header, _, body = data.partition(b"\r\n\r\n")
+        self.assertTrue(header.startswith(b"Content-Length:"))
+        content_length = int(header.split(b":")[1].strip())
+        self.assertEqual(content_length, len(body))
+        self.assertEqual(json.loads(body), payload)
+
+    def test_encode_message_round_trips(self):
+        payload = {"nested": {"a": 1, "b": [1, 2, 3]}}
+        _, _, body = DAPConnection.encode_message(payload).partition(b"\r\n\r\n")
+        self.assertEqual(json.loads(body), payload)
+
     def test_incomplete_message(self):
         # TODO:
         ...
@@ -45,19 +59,22 @@ class TestDAPUtils_DAPConnection(unittest.TestCase):
 
     @staticmethod
     def create_transport(data: List[RawMessage]) -> Transport:
-        class StringTransport:
+        class BinaryTransport:
             def __init__(self, data: List[RawMessage]):
                 encoded_data = [
-                    DAPConnection.encode_message(message).decode() for message in data
+                    DAPConnection.encode_message(message) for message in data
                 ]
-                self._in = io.StringIO("".join(encoded_data))
+                self._in = io.BytesIO(b"".join(encoded_data))
                 self._out: List[str] = []
 
-            def send(self, data: bytes):
+            def write(self, data: bytes):
                 self._out.append(data.decode("utf-8"))
 
-            def receive(self, n: int) -> bytes:
-                return self._in.read(n).encode()
+            def readline(self):
+                return self._in.readline()
+
+            def read(self, n: int) -> bytes:
+                return self._in.read(n)
 
             def close(self):
                 self._in.close()
@@ -66,7 +83,7 @@ class TestDAPUtils_DAPConnection(unittest.TestCase):
             def is_alive(self) -> bool:
                 return not self._in.closed
 
-        return StringTransport(data)
+        return BinaryTransport(data)
 
     def raw_data(self):
         # fmt: off

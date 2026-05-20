@@ -10,22 +10,14 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
-from typing import Any, Dict, Optional, TypeVar, cast
+from typing import Any, Callable, Dict, List, Optional, TypeVar, cast
+from typing import Type
 
+from lldb_dap.dap_types import ErrorResponse
 from lldb_dap.utils import DebugAdapter, DebugAdapterOptions
 
 from . import configuration
 from .session_helpers import DAPTestSession
-
-
-def line_number(filename, string_to_match):
-    """Helper function to return the line number of the first matched string."""
-    with io.open(filename, mode="r", encoding="utf-8") as f:
-        for i, line in enumerate(f):
-            if line.find(string_to_match) != -1:
-                # Found our match.
-                return i + 1
-    raise Exception("Unable to find '%s' within file %s" % (string_to_match, filename))
 
 
 def is_exe(fpath: str):
@@ -36,24 +28,6 @@ def is_exe(fpath: str):
         if not fpath.endswith(".exe"):
             fpath += ".exe"
     return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
-
-
-def skipif_platform(oslist: list[str]):
-    """Decorate the item to skip tests if running on one of the listed platforms."""
-    # This decorator cannot be ported to `skipIf` yet because it is used on entire
-    # classes, which `skipIf` explicitly forbids.
-    oslist = [name.lower() for name in oslist]
-    return unittest.skipIf(
-        sys.platform.lower() in oslist, "skip on %s" % (", ".join(oslist))
-    )
-
-
-def skipif_darwin():
-    return skipif_platform(["darwin"])
-
-
-def skipif_linux():
-    return skipif_platform(["linux"])
 
 
 def strtobool(val: str) -> bool:
@@ -75,6 +49,7 @@ class DAPTestCaseBase(unittest.TestCase):
     # The environment variables that is set when launching the
     # debug adapter in create_debug_adapter.
     LLDB_DAP_ENV: Dict[str, str] = {}
+    IS_C = False
 
     @classmethod
     def setUpClass(cls):
@@ -84,13 +59,42 @@ class DAPTestCaseBase(unittest.TestCase):
             dap_path = "/Volumes/workspace/Dev/llvm-build/release/bin/lldb-dap"
 
         cls.lldbDAPExec = os.getenv("DAP_ADAPTER_PATH", dap_path)
-        cls.adapter_timeout = float(os.getenv("DAP_TIMEOUT", "100"))
-        cls.run_as_server: bool = strtobool(os.getenv("DAP_RUN_AS_SERVER", "false"))
-        cls.DEFAULT_TIMEOUT = cls.adapter_timeout
+        cls.DEFAULT_TIMEOUT = float(os.getenv("DAP_TIMEOUT", "30"))
+
+        cls.run_as_server: bool = strtobool(os.getenv("DAP_RUN_AS_SERVER", "true"))
         module_file = sys.modules[cls.__module__].__file__
         assert module_file is not None
         cls.test_base_dir = Path(module_file).stem
         cls.oldcwd = os.getcwd()
+
+    @classmethod
+    def setUpCommands(cls):
+        commands = [
+            # First of all, clear all settings to have clean state of global properties.
+            "settings clear --all",
+            # Disable Spotlight lookup. The testsuite creates
+            # different binaries with the same UUID, because they only
+            # differ in the debug info, which is not being hashed.
+            "settings set symbols.enable-external-lookup false",
+            # Inherit the TCC permissions from the inferior's parent.
+            "settings set target.inherit-tcc true",
+            # Based on https://discourse.llvm.org/t/running-lldb-in-a-container/76801/4
+            "settings set target.disable-aslr false",
+            # Kill rather than detach from the inferior if something goes wrong.
+            "settings set target.detach-on-error false",
+            # Disable fix-its by default so that incorrect expressions in tests don't
+            # pass just because Clang thinks it has a fix-it.
+            "settings set target.auto-apply-fixits false",
+            # Testsuite runs in parallel and the host can have also other load.
+            "settings set plugin.process.gdb-remote.packet-timeout 60",
+            # Disable colors by default.
+            "settings set use-color false",
+            # Disable the statusline by default.
+            "settings set show-statusline false",
+            "settings set target.check-vo-ownership true",
+        ]
+
+        return commands
 
     def setUp(self):
         """Set up each test"""
@@ -106,8 +110,7 @@ class DAPTestCaseBase(unittest.TestCase):
         os.makedirs(self._source_dir)
         os.chdir(str(self._source_dir))
 
-        # Create DAP client
-
+        # Create Debug Adapter.
         if self.run_as_server:
             # Launch using socket.
             self.adapter = self.create_adapter_in_server_mode(
@@ -121,21 +124,48 @@ class DAPTestCaseBase(unittest.TestCase):
                 DebugAdapterOptions(cwd=self.getBuildDir())
             )
 
-        self.session = DAPTestSession(
-            self, self.test_dir, self.adapter, message_timeout=self.adapter_timeout
+    def create_session(
+        self,
+        adapter: Optional[DebugAdapter] = None,
+        disconnect_automatically: Optional[bool] = None,
+    ) -> DAPTestSession:
+        if adapter is None:
+            self.assertIsNotNone(self.adapter, "expected we already have an adapter.")
+            adapter = self.adapter
+        self.assertTrue(adapter.is_alive, "expected adapter process is alive.")
+
+        if adapter.is_server and disconnect_automatically is not None:
+            self.assertFalse(
+                disconnect_automatically,
+                "disconnect_automatically is not supported for lldb-dap running as a server",
+            )
+
+        session = DAPTestSession(
+            self, self.test_dir, adapter, message_timeout=self.DEFAULT_TIMEOUT
         )
-        self.session.start()
+
+        def cleanup_session():
+            # In server mode the adapter automatically shuts down after the last
+            # client disconnects.
+            if not adapter.is_server and disconnect_automatically:
+                session.do_disconnect(terminateDebuggee=True)
+            session.stop()
+
+        self.addTearDownHook(cleanup_session)
+        session.start()
+        return session
+
+    def build_and_create_session(
+        self,
+        adapter: Optional[DebugAdapter] = None,
+        disconnect_automatically: Optional[bool] = None,
+    ):
+        self.build()
+        return self.create_session(adapter, disconnect_automatically)
 
     def tearDown(self):
         """Clean up after each test"""
-        # TODO: WRITE warning that the session is still running before trying to close it
-        self.session.stop()
-        if self.adapter.is_alive:
-            self.adapter.kill()
 
-        # # Clean up temp directory
-        # if self.test_dir and self.test_dir.exists():
-        #     shutil.rmtree(self.test_dir)
         gc.collect()
         super(DAPTestCaseBase, self).tearDown()
 
@@ -180,23 +210,11 @@ class DAPTestCaseBase(unittest.TestCase):
             command += ["--max-size=%d" % max_size]
         self.run_command(command)
 
-    def build(self):
+    def build(self, filename: Optional[str] = None):
         assert self.TEST_PROGRAM is not None
-        self.create_test_program_with_name("main.cpp")
-
-    def create_debug_session(self, adapter: DebugAdapter) -> DAPTestSession:
-        # TODO: ??
-        """Create the lldb-dap debug adapter"""
-        self.assertTrue(
-            is_exe(self.lldbDAPExec), "lldb-dap must exist and be executable"
-        )
-        test_session = DAPTestSession(
-            self,
-            self.test_dir,
-            adapter,
-            message_timeout=self.adapter_timeout,
-        )
-        return test_session
+        opt_filename = "main.c" if self.IS_C else "main.cpp"
+        filename = filename or opt_filename
+        self.create_test_program_with_name(filename)
 
     def create_adapter(self, adapter_options: DebugAdapterOptions):
         self.assertTrue(
@@ -220,17 +238,24 @@ class DAPTestCaseBase(unittest.TestCase):
         env = copy.deepcopy(adapter_options.env)
         # Tests may add new environment variables.
         env.update(self.LLDB_DAP_ENV)
-        adapter_options = adapter_options.clone(log_file=log_file, cwd=cwd, env=env)
+        args : List[str] = []
+        for command in self.setUpCommands():
+            args.extend(["--pre-init-command", command])
+        args.extend(adapter_options.args)
+
+        adapter_options = adapter_options.clone(
+            log_file=log_file, cwd=cwd, env=env, args=args
+        )
 
         adapter = DebugAdapter(executable=self.lldbDAPExec, opts=adapter_options)
 
         assert adapter.is_alive
 
-        def cleanup():
+        def cleanup_adapter():
             if adapter.is_alive:
                 adapter.kill()
 
-        self.addCleanup(cleanup)
+        self.addTearDownHook(cleanup_adapter)
         return adapter
 
     def create_adapter_in_stdio_mode(self, adapter_options: DebugAdapterOptions):
@@ -261,10 +286,6 @@ class DAPTestCaseBase(unittest.TestCase):
         assert adapter.is_server
         return adapter
 
-    def start_debug_session(self, adapter_options: DebugAdapterOptions):
-        self.adapter = self.create_adapter(adapter_options)
-        self.session = self.create_debug_session(self.adapter)
-
     def create_test_program_with_name(self, filename: str):
         file = self.create_file(self.TEST_PROGRAM, filename)
         return self.compile_program(file)
@@ -285,7 +306,12 @@ class DAPTestCaseBase(unittest.TestCase):
             args = " ".join(result.args)
             raise Exception(f"{result}\n{args}")
 
-    def compile_program(self, filepath: str, output_name: Optional[str] = None):
+    def compile_program(
+        self,
+        filepath: str,
+        output_name: Optional[str] = None,
+        extra_args: Optional[list[str]] = None,
+    ):
         assert self.test_dir is not None
         output_name = output_name or "a.out"
         output_path = self.getBuildArtifact(output_name)
@@ -294,10 +320,32 @@ class DAPTestCaseBase(unittest.TestCase):
             compiler = "/usr/bin/clang"
         else:
             compiler = "/usr/bin/clang++"
-        self.run_command([compiler, "-g", "-o", output_path, filepath])
+
+        commands = [compiler, "-g"]
+        if extra_args is not None:
+            commands.extend(extra_args)
+        commands.extend(["-o", output_path, filepath])
+
+        self.run_command(commands)
         return str(self.test_dir / output_name)
+
+    def addTearDownHook(self, func: Callable):
+        self.addCleanup(func)
 
     def expect_is_not_none(self, value: Optional[T], msg: Any = None) -> T:
         """Convenience function for getting fields that is optional. as most DAP types are"""
         self.assertIsNotNone(value, msg=msg)
         return cast(T, value)
+
+    def expect_error_response(
+        self, value: object | ErrorResponse, msg: Any = None
+    ) -> ErrorResponse:
+        """Convenience function for narrowing a response Union to `ErrorRespones`."""
+        self.assertIsInstance(value, ErrorResponse, msg=msg)
+        return cast(ErrorResponse, value)
+
+    def expect_success_response(self, value: T | ErrorResponse, msg: Any = None) -> T:
+        """Convenience function for narrowing a response Union to the success type."""
+        self.assertNotIsInstance(value, ErrorResponse, msg=msg)
+        return cast(T, value)
+    

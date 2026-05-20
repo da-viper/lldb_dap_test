@@ -2,14 +2,10 @@
 Test lldb-dap launch request.
 """
 
-# from lldbsuite.test.decorators import skipIf
-# # from lldbsuite.test.lldbtest import line_number
-# import lldbdap_testcase
-
-
-import unittest
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase, line_number
+from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldb_dap.dap_types import InitializedEvent, LaunchArgs
+from lldbsuite.test.decorators import skipIf
+from lldbsuite.test.lldbtest import line_number
 
 
 class TestDAP_launch_commands(DAPTestCaseBase):
@@ -30,16 +26,16 @@ class TestDAP_launch_commands(DAPTestCaseBase):
     the debugger session terminates.
     """
 
-    # @skipIf(archs=["arm$", "aarch64"], bugnumber=6933)
+    @skipIf(archs=["arm$", "aarch64"], bugnumber=6933)
     def test(self):
-        program = self.create_test_program_with_name("main.cpp")
+        program = self.getBuildArtifact("a.out")
         initCommands = ["taret list", "platform list"]
         preRunCommands = ["image list a.out", "image dump sections a.out"]
         postRunCommands = ["help trace", "help process trace"]
         stopCommands = ["frame variable", "bt"]
         exitCommands = ["expr 2+3", "expr 3+4"]
         terminateCommands = ["expr 4+2"]
-        session = self.session
+        session = self.build_and_create_session()
         launch_handle = session.initialize_and_launch(
             LaunchArgs(
                 program,

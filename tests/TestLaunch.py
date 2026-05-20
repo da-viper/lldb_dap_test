@@ -15,16 +15,17 @@ int main() {
 
     def test_launch_simple_program(self):
         """Test launching a simple program"""
-        program = self.create_and_compile_file(self.TEST_PROGRAM)
-        process_event, _ = self.session.launch_using_config(LaunchArgs(program=program))
+        program = self.getBuildArtifact("a.out")
+        session = self.build_and_create_session()
+        process_event = session.launch_using_config(LaunchArgs(program=program))
 
-        self.session.verify_process_exited(after=process_event)
-        self.session.request_and_respond(DisconnectArgs())
+        session.verify_process_exited(after=process_event)
+        session.request_and_respond(DisconnectArgs())
 
     def test_launch_nonexistent_program(self):
         """Test launching a non-existent program"""
+        session = self.build_and_create_session()
         launch_args = LaunchArgs(program="nonexistent/program")
-        session = self.session
         handle = session.initialize_and_launch(launch_args)
 
         with self.assertRaises(AssertionError):
@@ -37,11 +38,12 @@ int main() {
 
     def test_launch_with_stop_on_entry(self):
         """Test launching with stopOnEntry"""
-        test_program = self.create_and_compile_file(self.TEST_PROGRAM)
+        test_program = self.getBuildArtifact("a.out")
+        session = self.build_and_create_session()
 
-        process_event, _ = self.session.launch_using_config(
+        process_event = session.launch_using_config(
             LaunchArgs(program=test_program, stopOnEntry=True)
         )
 
-        self.session.verify_stopped_on_entry(after=process_event)
-        self.session.continue_to_exit()
+        session.verify_stopped_on_entry(after=process_event)
+        session.continue_to_exit()

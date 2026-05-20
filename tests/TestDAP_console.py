@@ -6,8 +6,9 @@ import platform
 import os
 import sys
 from lldb_dap.dap_types import LaunchArgs
-from lldb_dap.lldb_dap_testcase import line_number
 from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.decorators import skipIfWindows
+from lldbsuite.test.lldbtest import line_number
 
 
 def get_subprocess(root_process, process_name: str):
@@ -61,6 +62,10 @@ Streams:
 
 """
 
+    def setUp(self):
+        super().setUp()
+        self.session = self.build_and_create_session()
+
     def build(self):
         self.create_test_program_with_name("main.cpp")
         self.create_file(self.MINI_DUMP_YAML, "minidump.yaml")
@@ -100,7 +105,6 @@ Streams:
         evaluated and the lldb commands that start with the backtick
         character.
         """
-        self.build()
         session = self.session
         program = self.getBuildArtifact("a.out")
         source = "main.cpp"
@@ -135,15 +139,14 @@ Streams:
         session.continue_to_exit()
 
     def test_custom_escape_prefix(self):
-        self.build()
         session = self.session
         program = self.getBuildArtifact("a.out")
-        source = "main.cpp"
-        breakpoint1_line = line_number(source, "// breakpoint 1")
         with session.configure(LaunchArgs(program, commandEscapePrefix="::")) as ctx:
+            source = "main.cpp"
+            breakpoint1_line = line_number(source, "// breakpoint 1")
             bp_ids = session.resolve_source_breakpoints(source, [breakpoint1_line])
-        process_event = ctx.process_event()
 
+        process_event = ctx.process_event()
         session.verify_stopped_on_breakpoint(bp_ids, after=process_event)
 
         self.check_lldb_command(
@@ -155,7 +158,6 @@ Streams:
         session.continue_to_exit()
 
     def test_empty_escape_prefix(self):
-        self.build()
         session = self.session
         program = self.getBuildArtifact("a.out")
         source = "main.cpp"
@@ -175,9 +177,8 @@ Streams:
         )
         session.continue_to_exit()
 
-    # @skipIfWindows TODO:
+    @skipIfWindows
     def test_exit_status_message_sigterm(self):
-        self.build()
         source = "main.cpp"
         session = self.session
         program = self.getBuildArtifact("a.out")
@@ -199,12 +200,11 @@ Streams:
         try:
             import psutil
         except ImportError:
-            print(
+            self.skipTest(
                 "psutil not installed, please install using 'pip install psutil'. "
-                "Skipping test_exit_status_message_sigterm test.",
-                file=sys.stderr,
+                "Skipping test_exit_status_message_sigterm test."
             )
-            return
+
         process = get_subprocess(psutil.Process(os.getpid()), process_name)
         process.terminate()
         process.wait()
@@ -222,9 +222,8 @@ Streams:
         )
 
     def test_exit_status_message_ok(self):
-        self.build()
         program = self.getBuildArtifact("a.out")
-        process_event, _ = self.session.launch_using_config(
+        process_event = self.session.launch_using_config(
             LaunchArgs(program, commandEscapePrefix="")
         )
         self.session.verify_process_exited()
@@ -242,10 +241,9 @@ Streams:
         )
 
     def test_diagnositcs(self):
-        self.build()
         session = self.session
         program = self.getBuildArtifact("a.out")
-        process_event, _ = session.launch_using_config(
+        process_event = session.launch_using_config(
             LaunchArgs(program, stopOnEntry=True)
         )
         stop_event = session.verify_stopped_on_entry(after=process_event)

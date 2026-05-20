@@ -3,12 +3,10 @@ Test lldb-dap repl mode detection
 """
 
 from typing import Optional
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase, line_number
-from lldb_dap.dap_types import (
-    LaunchArgs,
-    StackTraceArgs,
-    StoppedEvent,
-)
+
+from lldb_dap.dap_types import LaunchArgs, StackTraceArgs, StoppedEvent
+from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.lldbtest import line_number
 
 
 class TestDAP_repl_mode_detection(DAPTestCaseBase):
@@ -31,6 +29,10 @@ int main() {
 
 """
 
+    def setUp(self):
+        super().setUp()
+        self.session = self.build_and_create_session()
+
     def get_frame_id_from_event(self, stopped_event: StoppedEvent):
         thread_id = self.expect_is_not_none(stopped_event.body.threadId)
 
@@ -50,28 +52,27 @@ int main() {
         self.assertRegex(result, regex)
 
     def test_completions(self):
-        program = self.create_test_program_with_name("main.cpp")
+        program = self.getBuildArtifact("a.out")
         session = self.session
-        l_handle = session.initialize_and_launch(LaunchArgs(program))
+        with session.configure(LaunchArgs(program)) as ctx:
+            source = "main.cpp"
+            breakpoint1_line = line_number(source, "// breakpoint 1")
+            breakpoint2_line = line_number(source, "// breakpoint 2")
 
-        source = "main.cpp"
-        breakpoint1_line = line_number(source, "// breakpoint 1")
-        breakpoint2_line = line_number(source, "// breakpoint 2")
+            session.resolve_source_breakpoints(
+                source, [breakpoint1_line, breakpoint2_line]
+            )
 
-        session.resolve_source_breakpoints(source, [breakpoint1_line, breakpoint2_line])
+            self.assertEvaluate("lldb-dap repl-mode", "auto")
+            # The result of the commands should return the empty string.
+            self.assertEvaluate("`command regex user_command s/^$/platform/", r"^$")
+            self.assertEvaluate("`command alias alias_command platform", r"^$")
+            self.assertEvaluate(
+                "`command alias alias_command_with_arg platform select --sysroot %1 remote-linux",
+                r"^$",
+            )
 
-        self.assertEvaluate("lldb-dap repl-mode", "auto")
-        # The result of the commands should return the empty string.
-        self.assertEvaluate("`command regex user_command s/^$/platform/", r"^$")
-        self.assertEvaluate("`command alias alias_command platform", r"^$")
-        self.assertEvaluate(
-            "`command alias alias_command_with_arg platform select --sysroot %1 remote-linux",
-            r"^$",
-        )
-
-        session.verify_configuration_done()
-        launch_response = session.get_response(l_handle)
-        stop_event = session.verify_stopped_on_breakpoint(after=launch_response)
+        stop_event = session.verify_stopped_on_breakpoint(after=ctx.process_event())
         top_frame = self.get_frame_id_from_event(stop_event)
 
         self.assertEvaluate("user_command", "474747", top_frame)

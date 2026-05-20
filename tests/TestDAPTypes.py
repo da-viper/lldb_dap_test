@@ -1,4 +1,3 @@
-from lldb_dap.dap_types import StoppedReason
 import copy
 import unittest
 from dataclasses import dataclass, field
@@ -14,6 +13,7 @@ from lldb_dap.dap_types import (
     Source,
     StackTraceResponse,
     StoppedEvent,
+    StoppedReason,
     dict_to_message,
     message_to_dict,
 )

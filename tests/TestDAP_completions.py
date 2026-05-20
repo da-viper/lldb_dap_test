@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Optional
 from dataclasses import dataclass
 
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase, line_number
+from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldb_dap.dap_types import (
     CompletionItem,
     LaunchArgs,
@@ -16,6 +16,7 @@ from lldb_dap.dap_types import (
     ThreadsArgs,
 )
 from lldb_dap.session_helpers import ThreadContext
+from lldbsuite.test.lldbtest import line_number
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,10 @@ int main(int argc, char const *argv[]) {
 }
 """
 
+    def setUp(self):
+        super().setUp()
+        self.session = self.build_and_create_session()
+
     def verify_completions(self, case: Scenario, top_frame_id: Optional[int] = None):
         session = self.session
         completions = {
@@ -113,7 +118,7 @@ int main(int argc, char const *argv[]) {
                 self.assertNotIn(not_exp_comp, completions)
 
     def setup_debuggee(self):
-        program = self.create_test_program_with_name("main.cpp")
+        program = self.getBuildArtifact("a.out")
         source = "main.cpp"
         with self.session.configure(LaunchArgs(program)) as ctx:
             self.session.resolve_source_breakpoints(

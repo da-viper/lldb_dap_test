@@ -1,3 +1,7 @@
+"""
+Test lldb-dap launch request.
+"""
+
 from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldb_dap.dap_types import LaunchArgs
 
@@ -29,12 +33,13 @@ int main(int argc, char const *argv[], char const *envp[]) {
 }"""
 
     def test(self):
-        program = self.create_and_compile_file(self.TEST_PROGRAM)
+        program = self.getBuildArtifact("a.out")
         args = ["one", "with space", "'with single quotes'", '"with double quotes"']
-        self.session.launch_using_config(LaunchArgs(program=program, args=args))
-        self.session.verify_process_exited()
+        session = self.build_and_create_session()
+        session.launch_using_config(LaunchArgs(program=program, args=args))
+        session.verify_process_exited()
 
-        output = self.session.get_stdout()
+        output = session.get_stdout()
         self.assertTrue(output and len(output) > 0, "expect program output")
         lines = output.splitlines()
         # Skip the first argument that contains the program name
