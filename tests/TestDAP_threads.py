@@ -2,9 +2,13 @@
 Test lldb-dap threads request
 """
 
-from lldb_dap.dap_types import LaunchArgs, StoppedReason, ThreadsArgs
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.dap_types import (
+    LaunchArgs,
+    StoppedReason,
+    ThreadsArgs,
+)
 
 
 class TestDAP_threads(DAPTestCaseBase):
@@ -50,7 +54,7 @@ int main(int argc, char **argv) {
             breakpoint_ids = session.resolve_source_breakpoints(
                 source, [breakpoint_line]
             )
-        process_event = ctx.process_event()
+        process_event = ctx.process_event
         stop_event_1 = session.verify_stopped_on_breakpoint(after=process_event)
 
         # We're now stopped at the breakpoint in the first thread, thread #2.
@@ -65,12 +69,12 @@ int main(int argc, char **argv) {
 
         # Verify that the description is the relevant breakpoint,
         # preserveFocusHint is False and threadCausedFocus is True.
-        stop_description = self.expect_is_not_none(stop_event.body.description)
+        stop_description = self.expect_not_none(stop_event.body.description)
         self.assertTrue(stop_description.startswith(f"breakpoint {breakpoint_ids[0]}"))
         self.assertIsNone(stop_event.body.preserveFocusHint)
 
         # All threads should be named Thread {index}.
-        threads = session.request_and_respond(ThreadsArgs()).body.threads
+        threads = session.send_request(ThreadsArgs()).result().body.threads
         self.assertTrue(all(len(t.name) > 0 for t in threads))
 
         session.continue_to_exit()
@@ -93,11 +97,11 @@ int main(int argc, char **argv) {
             )
         ) as ctx:
             bp_ids = session.resolve_source_breakpoints(source, [breakpoint_line])
-        process_event = ctx.process_event()
+        process_event = ctx.process_event
         session.verify_stopped_on_breakpoint(bp_ids, after=process_event)
 
-        # We are stopped at the first thread.
-        threads = session.request_and_respond(ThreadsArgs()).body.threads
+        # We stopped at the first thread.
+        threads = session.send_request(ThreadsArgs()).result().body.threads
         if self.getPlatform() == "windows":
             # Windows creates a thread pool once WaitForSingleObject is called
             # by thread.join(). As we are in the thread function, we can't be

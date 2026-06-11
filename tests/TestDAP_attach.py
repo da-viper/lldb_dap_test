@@ -3,14 +3,14 @@ Test lldb-dap attach request
 """
 
 import os
+import subprocess
 import time
-from typing import List, Optional
 import unittest
 import uuid
-import subprocess
+from typing import List, Optional
 
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldb_dap.dap_types import AttachArgs
+from lldbsuite.test.tools.lldb_dap.dap_types import AttachArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 def wait_for_file_on_target(testcase: unittest.TestCase, file_path):
@@ -118,7 +118,7 @@ int main(int argc, char const *argv[]) {
         proc = self.spawn(program=program)
         self.assertIsNone(proc.poll())
 
-        process_event = session.attach_using_config(AttachArgs(pid=proc.pid))
+        process_event = session.attach(AttachArgs(pid=proc.pid))
         self.assertIsNone(proc.poll())
         self.assertEqual(process_event.body.systemProcessId, proc.pid)
         self.verify_pid(proc)
@@ -137,7 +137,7 @@ int main(int argc, char const *argv[]) {
         wait_for_file_on_target(self, program)
 
         time.sleep(10)
-        process_event = session.attach_using_config(AttachArgs(program=program))
+        process_event = session.attach(AttachArgs(program=program))
         self.assertIsNone(proc.poll())
         self.assertEqual(process_event.body.systemProcessId, proc.pid)
         self.verify_pid(proc)

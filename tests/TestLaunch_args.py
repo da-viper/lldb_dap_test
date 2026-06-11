@@ -1,5 +1,5 @@
-from lldb_dap.dap_types import LaunchArgs
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 class TestDAP_launch_args(DAPTestCaseBase):
@@ -33,7 +33,7 @@ int main(int argc, char const *argv[], char const *envp[]) {
         args = ["one", "with space", "'with single quotes'", '"with double quotes"']
 
         session = self.build_and_create_session()
-        process_event = session.launch_using_config(LaunchArgs(program, args=args))
+        process_event = session.launch(LaunchArgs(program, args=args))
         session.verify_process_exited(after=process_event)
 
         # Now get the STDOUT and verify our arguments got passed correctly

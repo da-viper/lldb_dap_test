@@ -1,7 +1,7 @@
-from lldb_dap.dap_types import LaunchArgs, VariablesArgs
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldbsuite.test.decorators import skipif_darwin
+from lldbsuite.test.decorators import expectedFailureAll, skipif_darwin
 from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 class TestDAP_variables_children(DAPTestCaseBase):
@@ -72,15 +72,14 @@ def __lldb_init_module(debugger, dict):
     cat.SetEnabled(True)
 """
 
+    def build(self, filename=None):
+        super().build()
+        self.create_file(self.FORMATTER_PY, "formatter.py")
+
     def test_get_num_children(self):
         """Test that GetNumChildren is not called for formatters not producing indexed children."""
         session = self.build_and_create_session()
-        source = self.getBuildArtifact("main.cpp")
-        program = self.create_test_program_with_name(source)
-        self.create_file(self.FORMATTER_PY, "formatter.py")
-        # session.launch_using_config(config)
-        # TODO this should work
-        breakpoint_line = line_number(source, "// break here")
+        program = self.getBuildArtifact("a.out")
         with session.configure(
             LaunchArgs(
                 program,
@@ -89,13 +88,15 @@ def __lldb_init_module(debugger, dict):
                 ],
             )
         ) as ctx:
+            source = self.getSourcePath("main.cpp")
+            breakpoint_line = line_number(source, "// break here")
             session.resolve_source_breakpoints(source, [breakpoint_line])
-        process_event = ctx.process_event()
-        stopped_event = session.verify_stopped_on_breakpoint(after=process_event)
-        thread = session.get_thread_context(stopped_event.body.threadId)
+
+        stopped_event = session.verify_stopped_on_breakpoint(after=ctx.process_event)
+        thread = session.thread_context_from(stopped_event)
         local_vars = thread.top_frame().locals.variables()
-        indexed_var = next(filter(lambda x: x.name == "indexed", local_vars))
-        not_indexed_var = next(filter(lambda x: x.name == "not_indexed", local_vars))
+        indexed_var = next(x for x in local_vars if x.name == "indexed")
+        not_indexed_var = next(x for x in local_vars if x.name == "not_indexed")
 
         self.assertIsNotNone(indexed_var.indexedVariables)
         self.assertEqual(indexed_var.indexedVariables, 1)
@@ -106,7 +107,7 @@ def __lldb_init_module(debugger, dict):
         )
         self.assertIn("['Indexed']", resp_body.result)
 
-    # @expectedFailureAll(archs=["arm$", "arm64", "aarch64"]) # TODO
+    @expectedFailureAll(archs=["arm$", "arm64", "aarch64"])
     @skipif_darwin()
     def test_return_variable_with_children(self):
         """
@@ -121,16 +122,16 @@ def __lldb_init_module(debugger, dict):
             self.assertEqual(len(breakpoint_ids), 1)
 
         stopped_event = session.wait_until_any_breakpoint_hit(
-            breakpoint_ids, after=ctx.process_event()
+            breakpoint_ids, after=ctx.process_event
         )
 
-        thread_id = self.expect_is_not_none(
+        thread_id = self.expect_not_none(
             stopped_event.body.threadId,
             f"no thread id for stopped event {stopped_event}",
         )
         self.assertEqual(stopped_event.body.reason, "breakpoint")
 
-        thread = session.get_thread_context(thread_id)
+        thread = session.thread_context_from(thread_id)
         thread.step_out()
         local_variables = thread.top_frame().locals.variables()
         self.assertIsNot(len(local_variables), 0)
@@ -140,8 +141,7 @@ def __lldb_init_module(debugger, dict):
         result_var_ref = return_variable.variablesReference
         self.assertIsNot(result_var_ref, None, "There is no result value")
 
-        result_value = session.request_and_respond(VariablesArgs(result_var_ref))
-        result_children = result_value.body.variables
+        result_children = session.get_variables(result_var_ref)
         self.assertTrue(result_children, "The result does not have children")
 
         verify_children = {"buffer": '"hello world!"', "x": "10", "y": "20"}

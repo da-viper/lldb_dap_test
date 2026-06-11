@@ -25,10 +25,7 @@ export DAP_ADAPTER_PATH=/path/to/lldb-dap
 export DAP_TIMEOUT=100
 
 # Optional: run lldb_dap in server mode for the tests.
-export DAP_RUN_AS_SERVER=1
-
-# initialize venv.
-uv venv --seed
+export LLDBDAP_RUN_AS_SERVER=1
 
 # Run a single test file.
 uv run pytest tests/TestDAP_step.py -x
@@ -90,7 +87,7 @@ state. It will be used directly when writing any test.
       # get the launch/attach response, and a process event.
 
   # Outside the context we can now use the process event or launch response.
-  process_event = ctx.process_event()
+  process_event = ctx.process_event
   stop_event = session.verify_stopped_on_entry(after=process_event)
   ```
 
@@ -269,7 +266,7 @@ class TestMyFeature(DAPTestCaseBase):
         program = self.create_test_program_with_name("main.cpp")
         source = self.getSourcePath("main.cpp")
         bp_line = line_number(source, "// breakpoint here")
-        session = self.session
+        session = self._session
 
         # Startup handshake:
         # =========== Possible Launch sequences ==========
@@ -277,7 +274,7 @@ class TestMyFeature(DAPTestCaseBase):
         # initial breakpoints set inside the `with` block.
         with session.configure(LaunchArgs(program)) as ctx:
             session.resolve_source_breakpoints(source, [bp_line])
-        process_event = ctx.process_event()
+        process_event = ctx.process_event
 
         # (still debating which one to use, depends on which one is easier to write test with)
         # Or use the pending style

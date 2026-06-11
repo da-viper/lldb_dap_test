@@ -3,10 +3,10 @@ Test lldb-dap variables/stackTrace request for optimized code
 """
 
 
-from lldb_dap.dap_types import LaunchArgs
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldbsuite.test.decorators import skipIfAsan, skipIfWindows
 from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 class TestDAP_optimized(DAPTestCaseBase):
@@ -45,9 +45,9 @@ int main(int argc, char const *argv[]) {
             breakpoint_ids = session.resolve_source_breakpoints(source, lines)
 
         stop_event = session.verify_stopped_on_breakpoint(
-            breakpoint_ids, after=ctx.process_event()
+            breakpoint_ids, after=ctx.process_event
         )
-        frames = session.get_thread_context(stop_event.body.threadId).frames()
+        frames = session.thread_context_from(stop_event).frames()
         leaf_frame = frames[0].frame
         self.assertTrue(leaf_frame.name.endswith(" [opt]"))
 
@@ -68,9 +68,9 @@ int main(int argc, char const *argv[]) {
             breakpoint_ids = session.resolve_source_breakpoints(source, lines)
 
         stop_event = session.verify_stopped_on_breakpoint(
-            breakpoint_ids, after=ctx.process_event()
+            breakpoint_ids, after=ctx.process_event
         )
-        frame = session.get_thread_context(stop_event.body.threadId).top_frame()
+        frame = session.thread_context_from(stop_event).top_frame()
         optimized_variable = frame.locals["argc"]
 
         value = optimized_variable.value

@@ -3,10 +3,10 @@ Test lldb-dap stack trace response
 """
 
 
-from lldb_dap import lldb_dap_testcase
-from lldb_dap.dap_types import LaunchArgs, StackTraceArgs
 from lldbsuite.test.decorators import add_test_categories
 from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap import lldb_dap_testcase
+from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs, StackTraceArgs
 
 
 class TestDAP_subtleFrames(lldb_dap_testcase.DAPTestCaseBase):
@@ -25,6 +25,7 @@ int main() {
   return 0;
 }
 """
+
     def build(self):
         file = self.create_file(self.TEST_PROGRAM, "main.cpp")
         return self.compile_program(file, extra_args=["-stdlib=libc++"])
@@ -42,12 +43,10 @@ int main() {
                 source, [line_number(source, "BREAK HERE")]
             )
 
-        stop_event = session.verify_stopped_on_breakpoint(
-            bps, after=ctx.process_event()
-        )
+        stop_event = session.verify_stopped_on_breakpoint(bps, after=ctx.process_event)
 
-        thread_id = self.expect_is_not_none(stop_event.body.threadId)
-        resp = session.request_and_respond(StackTraceArgs(thread_id))
+        thread_id = self.expect_not_none(stop_event.body.threadId)
+        resp = session.send_request(StackTraceArgs(thread_id)).result()
         frames = resp.body.stackFrames
         for f in frames:
             if "__function" in f.name:

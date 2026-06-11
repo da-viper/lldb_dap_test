@@ -1,18 +1,23 @@
+# FIXME: remove when LLDB_MINIMUM_PYTHON_VERSION > 3.8
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import functools
 import io
 import itertools
 import json
+import logging
+import os
 import subprocess
 import threading
-from dataclasses import dataclass, fields
+from concurrent import futures
+from concurrent.futures import Future
+from dataclasses import fields
 from pathlib import Path
-from typing import Any, Callable, Generic, Optional, Type, TypeVar, Union
+from typing import Any, Callable, Generic, Optional, Type, TypeVar
 
-from lldb_dap.dap_types import (
-    AnyEvent,
+from .dap_types import (
     AnyResponse,
     ArgsProtocol,
     Capabilities,
@@ -33,8 +38,8 @@ from lldb_dap.dap_types import (
     OutputEvent,
     RawMessage,
     Request,
-    RestartArgs,
     Response,
+    RestartArgs,
     ReverseResponse,
     RunInTerminalRequest,
     RunInTerminalResponse,
@@ -44,11 +49,11 @@ from lldb_dap.dap_types import (
     TerminateArgs,
     dict_to_message,
 )
-from lldb_dap.utils import (
-    DAPConnection,
+from .utils import (
     DebugAdapter,
     EventHistory,
     MessageHandler,
+    SubProcessSpawner,
     redirect_stream,
 )
 
@@ -70,15 +75,62 @@ _RESUMING_COMMANDS = (
 )
 
 
-@dataclass(frozen=True)
-class ResponseHandle(Generic[AnyResponse]):
-    seq: int
-    response_class: Type[AnyResponse]
+class PendingResponse(Generic[AnyResponse]):
+    """A Holds the future to the expected request for the sequence id."""
 
-    def __post_init__(self):
+    def __init__(
+        self,
+        seq: int,
+        response_class: Type[AnyResponse],
+        raw_future: Future[RawMessage],
+        timeout: float,
+        command: str,
+        on_resolve: Callable[[Response], None] = lambda _: None,
+    ):
         assert issubclass(
-            self.response_class, Response
-        ), f"'{self.response_class.__name__}' must be a subclass of Response."
+            response_class, Response
+        ), f"'{response_class.__name__}' must be a subclass of Response."
+        self.seq = seq
+        self.response_class: Type[AnyResponse] = response_class
+        self._future = raw_future
+        self._timeout = timeout
+        self._command = command
+        self._on_resolve = on_resolve
+
+    def result(self, msg: Optional[str] = None) -> AnyResponse:
+        response = self.result_or_error()
+
+        if isinstance(response, self.response_class):
+            return response
+        detail = f"expected '{self.response_class.__name__}' got {response}."
+        raise DAPError(f"{msg}:\n\t{detail}" if msg else detail)
+
+    def error(self, msg: Optional[str] = None) -> ErrorResponse:
+        response = self.result_or_error()
+
+        if isinstance(response, ErrorResponse):
+            return response
+        detail = f"expected '{self.response_class.__name__}' got {response}."
+        raise DAPError(f"{msg}\n\t{detail}" if msg else detail)
+
+    def result_or_error(self) -> AnyResponse | ErrorResponse:
+        try:
+            raw = self._future.result(timeout=self._timeout)
+        except (TimeoutError, futures.TimeoutError) as e:
+            msg = f"\n\tRequest '{self._command}' (seq={self.seq}) timed out after {self._timeout}s"
+            e.args = (f"{e.args[0]}{msg}", *e.args)
+            raise
+        except ConnectionError as e:
+            raise DAPError(
+                f"Session ended before getting response for "
+                f"'{self._command}' (seq={self.seq})"
+            ) from e
+
+        cls = self.response_class if raw["success"] else ErrorResponse
+        response = cls.from_json(raw)
+
+        self._on_resolve(response)
+        return response
 
 
 def _synchronized(method: Callable[..., R]) -> Callable[..., R]:
@@ -93,14 +145,6 @@ def _synchronized(method: Callable[..., R]) -> Callable[..., R]:
 
 
 class _DAPSessionState:
-    """TODO: explain what this class is used for
-
-    We try to hold less states as possible.
-    most information you can get it from the event thread.
-    # We explicitly do not want to hold the seen / verified breakpoints
-    # as this may change when we get any breakpoint response
-    """
-
     def __init__(self):
         self._lock = threading.RLock()
         self._initialized = False
@@ -112,8 +156,6 @@ class _DAPSessionState:
             OutputCategory.IMPORTANT: io.StringIO(),
             OutputCategory.TELEMETRY: io.StringIO(),
         }
-        # TODO: still debating if we need to store stopped_thread
-        # and force all tests to get a stopped thread id.
         self._stopped_thread_id: Optional[int] = None
         self._last_response: Optional[Response] = None
         self._stop_generation: int = 0
@@ -166,36 +208,50 @@ class _DAPSessionState:
         }
         self._capabilities = dataclasses.replace(self._capabilities, **kwargs)
 
+    @property
+    @_synchronized
+    def last_response(self) -> Optional[Response]:
+        return self._last_response
+
+    @_synchronized
+    def set_last_response(self, response: Response):
+        self._last_response = response
+
 
 class Session:
+    """
+    Protocol-level DAP session managing communication and state with a debug adapter.
 
-    """DAP TestClient for testing debug adapters"""
+    Wraps a `DAPConnection` to handle message routing (requests, responses, and events).
+    It maintains the core session state, including negotiated capabilities.
 
-    # TODO: change how we think about things
-    # The normal session class should only deal with the raw messages.
-    # delegate other things to the test session
+    It only exists to separate the test helpers from the implementation.
+    see `DAPTestSession`.
+    """
 
     def __init__(
         self,
         test_dir: Path,
         adapter: DebugAdapter,
         message_timeout: float,
-        log_file: Optional[str] = None,
+        process_spawner: SubProcessSpawner,
+        logger: logging.Logger,
     ):
         self._test_dir = test_dir
-        log_file = log_file or str(self._test_dir / "test_dap.log")
-        self._test_message_log = open(log_file, "w")
 
         self._message_timeout = message_timeout
+        self._process_spawner = process_spawner
         self._next_sequence = functools.partial(next, itertools.count(start=1))
         self._state = _DAPSessionState()
 
         self._event_history = EventHistory(self._message_timeout)
         self._adapter = adapter
         self._connection = adapter.create_connection()
+        self._logger = logger.getChild(self._connection.id)
 
         def on_connection_closed(err: Optional[Exception]):
-            # We want fail early if is already a request for wait_for_X_event.
+            # We want fail early if there is already a request for wait_for_X_event
+            # in the main thread.
             self._event_history.close(err or Exception("Session Ended."))
 
         msg_handler = MessageHandler(
@@ -208,28 +264,33 @@ class Session:
             target=self._connection.start, args=[msg_handler], name="Read Thread"
         )
 
-        # Function Mappings
-        self.wait_for_first_event = self._event_history.wait_for_first_event
+        # Function Mappings.
+        self.wait_for_earliest_event = self._event_history.wait_for_earliest_event
         self.wait_for_any_event = self._event_history.wait_for_any_event
         self.wait_for_event = self._event_history.wait_for_event
         self.capabilities = self._state.capabilities
 
-        # Reverse Requests
+        # Reverse Requests.
         self._reverse_requests: list[Request] = []
         self._reverse_process: Optional[subprocess.Popen[bytes]] = None
-        # TODO: add some explanation on what this field is used for.
+        # The list of threads that redirects stdio when the debuggee
+        # is created using `RunInTerminal`.
         self._reverse_process_io_threads: list[threading.Thread] = []
 
     def last_response(self):
-        """Returns a copy of the last response message"""
-        response = self._state._last_response
-        assert response is not None, "expected at least previous response"
+        """Returns a copy of the response most recently consumed by a test.
+
+        This is the response a test last checked via (PendingResponse) not
+        the last response from the adapter. only useful when a helper function
+        does not expose the response such as `resolve_source_breakpoint`."""
+        response = self._state.last_response
+        assert response is not None, "expected at least previous response."
         return dataclasses.replace(response)
 
     @property
     def stopped_thread_id(self):
         thread_id = self._state.stopped_thread_id
-        assert thread_id is not None, "stopped thread id is never set"
+        assert thread_id is not None, "stopped thread id is never set."
         return thread_id
 
     def _current_stop_generation(self) -> int:
@@ -246,25 +307,22 @@ class Session:
             )
 
     def start(self) -> None:
-        """Start the connection"""
         self._read_thread.start()
         # Synchronize with the connection.
         self._connection.wait_until_alive(self._message_timeout)
 
     def _on_protocol_response(self, message: RawMessage) -> None:
-        """Handle response message"""
-        self._test_message_log.write(f"dap <- client {json.dumps(message)}\n")
+        self._logger.debug("<-- %s", json.dumps(message))
         command = message.get("command")
         if command == InitializeArgs.command_:
             if raw_capabilities := message.get("body"):
                 init_capabilities = dict_to_message(Capabilities, raw_capabilities)
                 self._state.update_capabilities(init_capabilities)
-        if message["command"] == DisconnectArgs.command_:
+        if command == DisconnectArgs.command_:
             self._connection.stop()
 
     def _on_protocol_event(self, message: RawMessage) -> None:
-        """Handle event message"""
-        self._test_message_log.write(f"dap <- client {json.dumps(message)}\n")
+        self._logger.debug("<-- %s", json.dumps(message))
 
         event = Event.from_json(message)
         event_name = event.event
@@ -290,11 +348,11 @@ class Session:
                 for thread in self._reverse_process_io_threads:
                     thread.join(self._message_timeout)
 
-        # Store in general event queue
+        # Store in general event queue.
         self._event_history.record(event)
 
     def _on_protocol_reverse_request(self, request: RawMessage):
-        self._test_message_log.write(f"dap <- client {json.dumps(request)}\n")
+        self._logger.debug("<-- %s", json.dumps(request))
         request_type = request.get("command", "unknown")
         if request_type == "runInTerminal":
             terminal_request = dict_to_message(RunInTerminalRequest, request)
@@ -306,17 +364,23 @@ class Session:
             )
 
     def _handle_run_in_terminal(self, request: RunInTerminalRequest):
-        terminal_args = request.arguments
-        process_args = terminal_args.args
-        env: dict[str, Any] = {}
-        if terminal_args.env:
-            for key, value in terminal_args.env.items():
-                env[key] = "" if value is None else value
+        request_args = request.arguments
+        [process_exe, *process_args] = request_args.args
+        # Per DAP spec, "env" contains additions/overrides to the
+        # default environment, not a full replacement. Merge with
+        # os.environ so the spawned process inherits PATH etc.
+        env_dict = os.environ.copy()
+        if request_args.env:
+            for key, value in request_args.env.items():
+                env_dict[key] = "" if value is None else value
 
-        self._test_message_log.write(f"runInTerminal process with args: {process_args}")
-        process = subprocess.Popen(
+        process_env = [f"{k}={v}" for k, v in env_dict.items()]
+        self._logger.info("runInTerminal process with args: %s", process_args)
+
+        process = self._process_spawner(
+            process_exe,
             process_args,
-            env=env,
+            process_env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -361,8 +425,8 @@ class Session:
     def ensure_initialized(self):
         if self._state.is_initialized:
             return
-        self.wait_for_first_event(InitializedEvent)
-        # Sanity check
+        self.wait_for_earliest_event(InitializedEvent)
+        # Sanity check.
         assert self._state.is_initialized
 
     def get_stdout(self):
@@ -379,8 +443,8 @@ class Session:
 
     def send_request(
         self, request_args: ArgsProtocol[AnyResponse]
-    ) -> ResponseHandle[AnyResponse]:
-        """Send a request and wait for response"""
+    ) -> PendingResponse[AnyResponse]:
+        """Send a request and return a `PendingResponse` to wait on."""
         assert isinstance(request_args, ArgsProtocol)
         seq = self._next_sequence()
 
@@ -395,61 +459,22 @@ class Session:
             arguments=request_args if len(fields(request_args)) > 0 else None,
         )
 
-        self._test_message_log.write(f"client -> dap {json.dumps(request.to_dict())}\n")
-        self._connection.send_request(request)
-        return ResponseHandle(seq, request_args.response_class_)
+        self._logger.debug("--> %s", json.dumps(request.to_dict()))
+        raw_future = self._connection.send_request(request)
+        return PendingResponse(
+            seq=seq,
+            response_class=request_args.response_class_,
+            raw_future=raw_future,
+            timeout=self._message_timeout,
+            command=request_args.command_,
+            on_resolve=self._state.set_last_response,
+        )
 
     def _send_response(self, response: ReverseResponse):
         assert isinstance(response, Response)
         response_dict = response.to_dict()
-        self._test_message_log.write(f"{response_dict}\n")
+        self._logger.debug("--> %s", response_dict)
         self._connection.send_message(response_dict)
-
-    def get_response_or_error(
-        self, handle: ResponseHandle[AnyResponse]
-    ) -> Union[AnyResponse, ErrorResponse]:
-        assert issubclass(handle.response_class, Response)
-        raw_response = self._connection.get_response(handle.seq, self._message_timeout)
-
-        if raw_response["success"] is False or handle.response_class is ErrorResponse:
-            response_type = ErrorResponse
-        else:
-            response_type = handle.response_class
-        response = response_type.from_json(raw_response)
-        self._state._last_response = response
-
-        return response
-
-    def get_response(self, handle: ResponseHandle[AnyResponse]) -> AnyResponse:
-        response = self.get_response_or_error(handle)
-        if not isinstance(response, handle.response_class):
-            raise DAPError(
-                f"expected '{handle.response_class.__name__}' got response: {response}."
-            )
-
-        return response
-
-    def get_error_response(self, handle: ResponseHandle) -> ErrorResponse:
-        response = self.get_response_or_error(handle)
-        if not isinstance(response, ErrorResponse):
-            raise DAPError(
-                f"expected '{handle.response_class.__name__}' got response: {response}."
-            )
-
-        return response
-
-    def wait_for_event_from_last_response(
-        self,
-        event_type: Type[AnyEvent],
-        until: Optional[Callable[[Event], bool]] = None,
-        *,
-        timeout: Optional[float] = None,
-    ) -> AnyEvent:
-        response = self.last_response()
-
-        return self._event_history.wait_for_event(
-            event_type, after=response, until=until, timeout=timeout
-        )
 
     def last_reverse_request(self) -> Request:
         assert len(self._reverse_requests) > 0, "No Reverse Request made"
@@ -470,34 +495,34 @@ class Session:
             if exit_code is not None:
                 assert proc_exit_code == exit_code, (
                     f"{proc_exit_code=} != expected_exit_code={exit_code} "
-                    f"for process pid: '{process.pid}', args: {process.args}"
+                    f"for process pid: '{process.pid}'"
                 )
 
     def stop(self) -> None:
+        logger = self._logger
         self._connection.stop()
 
         if self._read_thread.is_alive():
+            self._logger.info("Joining the read thread.")
             self._read_thread.join(self._message_timeout)
 
         # If the runInTerminal subprocess is still alive the redirect threads are
-        # blocked in read. Kill the process to stop thre redirect threads.
+        # blocked in read. Kill the process to stop the redirect threads.
         reverse_process = self._reverse_process
-        if (reverse_process := reverse_process) and reverse_process.poll() is None:
+        if reverse_process and reverse_process.poll() is None:
+            logger.info("Terminating the reverse process: %s.", reverse_process.args)
             reverse_process.terminate()
             try:
                 reverse_process.wait(timeout=2.0)
             except subprocess.TimeoutExpired:
+                logger.info("Force kill the reverse process: %s.", reverse_process.args)
                 reverse_process.kill()
 
         for thread in self._reverse_process_io_threads:
+            logger.info("Joining the reverse process io thread: %s.", thread.name)
             thread.join(timeout=self._message_timeout)
 
-        if not self._test_message_log.closed:
-            self._test_message_log.flush()
-            self._test_message_log.close()
-
     def __enter__(self):
-        self.start()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):

@@ -7,15 +7,15 @@ import re
 import shutil
 import sys
 
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldb_dap.dap_types import (
+from lldbsuite.test.decorators import skipIfWindows, skipUnlessDarwin
+from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap.dap_types import (
     CompileUnitsArgs,
     LaunchArgs,
     ModuleEvent,
     ModuleReason,
 )
-from lldbsuite.test.decorators import skipIfWindows, skipUnlessDarwin
-from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 class TestDAP_module(DAPTestCaseBase):
@@ -80,23 +80,15 @@ int main(int argc, char const *argv[]) {
         session = self.build_and_create_session()
         program_basename = "a.out.stripped"
         program = self.getBuildArtifact(program_basename)
-        launch_handle = session.initialize_and_launch(LaunchArgs(program))
-        init_response = session.last_response()
-        functions = ["foo"]
 
-        # This breakpoint will be resolved only when the libfoo module is loaded
-        breakpoints = session.set_function_breakpoints(functions).body.breakpoints
-        breakpoint_ids: list[int] = []
-        for bp in breakpoints:
-            if bp.id is None:
-                self.fail("id is None for breakpoint: {breakpoint}")
-            breakpoint_ids.append(bp.id)
+        with session.configure(LaunchArgs(program)) as ctx:
+            # This breakpoint will be resolved only when the libfoo module is loaded.
+            breakpoints = session.set_function_breakpoints(["foo"]).body.breakpoints
+            self.assertEqual(len(breakpoints), 1, "expect one breakpoint.")
 
-        self.assertEqual(len(breakpoint_ids), len(functions), "expect one breakpoint")
-        session.verify_configuration_done()
-        launch_response = session.get_response(launch_handle)
+            foo_bp_id = self.expect_not_none(breakpoints[0].id)
 
-        session.wait_until_any_breakpoint_hit(breakpoint_ids, after=launch_response)
+        session.verify_stopped_on_breakpoint(foo_bp_id, after=ctx.process_event)
         active_modules = session.get_modules()
         program_module = active_modules[program_basename]
         self.assertIn(
@@ -124,11 +116,11 @@ int main(int argc, char const *argv[]) {
         changed_module = changed_event.body.module
         self.assertEqual(program_module.name, changed_module.name)
         self.assertIsNotNone(changed_module.symbolFilePath)
-        changed_symbols_path = self.expect_is_not_none(changed_module.symbolFilePath)
+        changed_symbols_path = self.expect_not_none(changed_module.symbolFilePath)
         self.assertIn(symbols_path, changed_symbols_path)
 
         if expect_debug_info_size:
-            changed_debug_size = self.expect_is_not_none(changed_module.debugInfoSize)
+            changed_debug_size = self.expect_not_none(changed_module.debugInfoSize)
             size_regex = re.compile(r"[0-9]+(\.[0-9]*)?[KMG]?B")
             self.assertRegex(
                 changed_debug_size, size_regex, "expect has debug info size"
@@ -151,7 +143,7 @@ int main(int argc, char const *argv[]) {
             return is_changed_event
 
         session.wait_for_module_event(
-            after=init_response, until=seen_program_changed_event
+            after=ctx.init_response, until=seen_program_changed_event
         )
         # Make sure we got an event for every active module.
         self.assertNotEqual(len(module_new_names), 0)
@@ -194,12 +186,12 @@ int main(int argc, char const *argv[]) {
         with session.configure(LaunchArgs(program)) as ctx:
             breakpoint1_line = line_number(source, "// breakpoint 1")
             bp_ids = session.resolve_source_breakpoints(source, [breakpoint1_line])
-        process_event = ctx.process_event()
+        process_event = ctx.process_event
 
         session.verify_stopped_on_breakpoint(bp_ids, after=process_event)
 
         module_id = session.get_modules()["a.out"].id
-        response = session.request_and_respond(CompileUnitsArgs(module_id))
+        response = session.send_request(CompileUnitsArgs(module_id)).result()
         cu_paths = [cu.compileUnitPath for cu in response.body.compileUnits]
         self.assertIn(main_source_path, cu_paths, "Real path to main.cpp matches")
 

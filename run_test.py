@@ -6,7 +6,8 @@ import os
 import unittest
 import argparse
 from pathlib import Path
-from lldb_dap import configuration
+
+from lldbsuite.test import configuration
 
 sys.dont_write_bytecode = True
 

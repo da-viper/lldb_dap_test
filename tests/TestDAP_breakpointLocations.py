@@ -7,10 +7,10 @@ import os
 import sys
 from typing import List, Tuple
 
-from lldb_dap.dap_types import BreakpointLocation, LaunchArgs
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldbsuite.test.decorators import skipIfWindows
 from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap.dap_types import BreakpointLocation, LaunchArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 class TestDAP_breakpointLocations(DAPTestCaseBase):
@@ -72,7 +72,7 @@ int main(int argc, char const *argv[]) {
 }
 """
 
-    def build(self):
+    def build(self, filename=None):
         main_basename = "main-copy.cpp"
         # TODO: START -- this is not needed when we port
         other = self.create_file(self.OTHER_C, "other.c")
@@ -111,15 +111,12 @@ int main(int argc, char const *argv[]) {
         """Test retrieving the available breakpoint locations."""
         program = self.getBuildArtifact("a.out")
         session = self.build_and_create_session()
-        process_event = session.launch_using_config(
-            LaunchArgs(program, stopOnEntry=True)
-        )
+        process_event = session.launch(LaunchArgs(program, stopOnEntry=True))
         session.verify_stopped_on_entry(after=process_event)
 
-        # Ask for the breakpoint locations based only on the line number
+        # Ask for the breakpoint locations based only on the line number.
         loop_line = line_number(main_path, "// break loop")
         response = session.set_breakpoint_locations(main_path, loop_line)
-        self.assertTrue(response.success)
         breakpoint_locations = response.body.breakpoints
 
         expected_columns = [9, 13, 20, 23, 25, 34, 37, 39, 51]
@@ -129,11 +126,10 @@ int main(int argc, char const *argv[]) {
         ]
         self.assertEqual(breakpoint_locations, expected_locations)
 
-        # Ask for the breakpoint locations for a column range
+        # Ask for the breakpoint locations for a column range.
         response = session.set_breakpoint_locations(
             main_path, loop_line, column=24, endColumn=46
         )
-        self.assertTrue(response.success)
         breakpoint_locations = response.body.breakpoints
         expected_columns = [25, 34, 37, 39]
         expected_locations = [
@@ -142,26 +138,20 @@ int main(int argc, char const *argv[]) {
         ]
         self.assertEqual(breakpoint_locations, expected_locations)
 
-        # Ask for the breakpoint locations for a range of line numbers
+        # Ask for the breakpoint locations for a range of line numbers.
         response = session.set_breakpoint_locations(
             main_path, line=loop_line, column=39, endLine=loop_line + 2
         )
         self.maxDiff = None
-        self.assertTrue(response.success)
         # On some systems, there is an additional breakpoint available
         # at line 41, column 3, i.e. at the end of the loop. To make this
         # test more portable, only check that all expected breakpoints are
         # presented, but also accept additional breakpoints.
-        expected_line_columns: List[Tuple[int, int]] = [
-            # (line, column)
-            (40, 39),
-            (40, 51),
-            (42, 3),
-            (42, 18),
-        ]
         expected_locations = [
-            BreakpointLocation(line=line, column=column)
-            for line, column in expected_line_columns
+            BreakpointLocation(line=loop_line, column=39),
+            BreakpointLocation(line=loop_line, column=51),
+            BreakpointLocation(line=loop_line + 2, column=3),
+            BreakpointLocation(line=loop_line + 2, column=18),
         ]
         breakpoint_locations = response.body.breakpoints
         for bp in expected_locations:

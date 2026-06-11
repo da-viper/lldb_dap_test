@@ -2,10 +2,10 @@
 Test lldb-dap RestartRequest.
 """
 
-from lldb_dap.dap_types import LaunchArgs
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldbsuite.test.decorators import skipIfWindows
 from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 class TestDAP_restart(DAPTestCaseBase):
@@ -39,11 +39,11 @@ int main(int argc, char const *argv[], char const *envp[]) {
             )
 
         # Verify we hit A, then B.
-        session.verify_stopped_on_breakpoint([bp_A], after=ctx.process_event())
+        session.verify_stopped_on_breakpoint(bp_A, after=ctx.process_event)
         stop_event = session.continue_to_breakpoint(bp_B)
 
         # Make sure i has been modified from its initial value of 0.
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = session.thread_context_from(stop_event)
         i_val = thread_ctx.top_frame().locals["i"]
         self.assertEqual(
             i_val.value_as_int, 1234, "i != 1234 after hitting breakpoint B"
@@ -54,8 +54,8 @@ int main(int argc, char const *argv[], char const *envp[]) {
         resp = session.do_restart()
         self.assertTrue(resp.success)
 
-        stop_event = session.verify_stopped_on_breakpoint([bp_A], after=last_response)
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        stop_event = session.verify_stopped_on_breakpoint(bp_A, after=last_response)
+        thread_ctx = session.thread_context_from(stop_event)
         i_val = thread_ctx.top_frame().locals["i"]
         self.assertEqual(
             i_val.value_as_int, 0, "i != 0 after hitting breakpoint A on restart"
@@ -71,7 +71,7 @@ int main(int argc, char const *argv[], char const *envp[]) {
         with session.configure(LaunchArgs(program, stopOnEntry=True)) as ctx:
             [bp_main] = session.resolve_function_breakpoints(["main"])
 
-        session.verify_stopped_on_entry(after=ctx.process_event())
+        session.verify_stopped_on_entry(after=ctx.process_event)
 
         # Then, if we continue, we should hit the breakpoint at main.
         bp_stop_event = session.continue_to_breakpoint(bp_main)
@@ -96,11 +96,9 @@ int main(int argc, char const *argv[], char const *envp[]) {
             [bp_A] = session.resolve_source_breakpoints("main.c", [line_A])
 
         # Verify we hit A, then B.
-        stop_event = session.verify_stopped_on_breakpoint(
-            [bp_A], after=ctx.process_event()
-        )
+        stop_event = session.verify_stopped_on_breakpoint(bp_A, after=ctx.process_event)
 
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = session.thread_context_from(stop_event)
         argc_val = thread_ctx.top_frame().locals["argc"]
         # We don't set any arguments in the initial launch request, so argc
         # should be 1.
@@ -112,8 +110,8 @@ int main(int argc, char const *argv[], char const *envp[]) {
         resp = session.do_restart(LaunchArgs(program, args=["a", "b", "c", "d"]))
         self.assertTrue(resp.success)
 
-        stop_event = session.verify_stopped_on_breakpoint([bp_A], after=last_response)
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        stop_event = session.verify_stopped_on_breakpoint(bp_A, after=last_response)
+        thread_ctx = session.thread_context_from(stop_event)
         argc_val = thread_ctx.top_frame().locals["argc"]
         self.assertEqual(argc_val.value_as_int, 5, "argc != 5 after restart")
 

@@ -3,16 +3,17 @@ import sys
 from typing import Callable, List, TypeVar
 import unittest
 
-from lldb_dap import configuration
+from lldbsuite.test import configuration
 
 T = TypeVar("T")
+
 
 class no_match:
     def __init__(self, item):
         self.item = item
 
 
-def skipif_platform(oslist: List[str]):
+def skipIfPlatform(oslist: List[str]):
     """Decorate the item to skip tests if running on one of the listed platforms."""
     # This decorator cannot be ported to `skipIf` yet because it is used on entire
     # classes, which `skipIf` explicitly forbids.
@@ -21,24 +22,36 @@ def skipif_platform(oslist: List[str]):
         sys.platform.lower() in oslist, "skip on %s" % (", ".join(oslist))
     )
 
-def expected_failure_platform(oslist: List[str], func: Callable[..., T]):
 
+def expected_failure_platform(oslist: List[str]):
     """Decorate the item to skip tests if running on one of the listed platforms."""
     # This decorator cannot be ported to `skipIf` yet because it is used on entire
     # classes, which `skipIf` explicitly forbids.
     oslist = [name.lower() for name in oslist]
     if sys.platform.lower() in oslist:
-        return unittest.expectedFailure(func)
-    return func
+        return unittest.expectedFailure
+
+    def null_opt(func: Callable[..., T]):
+        return func
+
+    return null_opt
 
 
-def expectedFailureNetBSD(bugnumber=None):
-    def do_func(func: Callable[..., T]):
-        return expected_failure_platform(["netbsd"], func)
-    return do_func
+def skipIfNoSignals(func):
+    """Decorate the item to skip tests on platforms without signal support."""
+    return skipIfPlatform(["windows", "wasip1", "wasi"])(func)
+
+
+def expectedFailureNetBSD(func: Callable[..., T], bugnumber=None):
+    return expected_failure_platform(["netbsd"])(func)
+
+
+def expectedFailureAll(oslist: List[str] = [], **kwargs):
+    return expected_failure_platform(oslist)
+
 
 def expectedFailureWindows(func: Callable[..., T]):
-    return expected_failure_platform(["windows"], func)
+    return expected_failure_platform(["windows"])(func)
 
 
 def skipUnlessPlatform(oslist: List[str]):
@@ -58,15 +71,15 @@ def skipUnlessArch(arch: str, /):
 
 
 def skipif_darwin():
-    return skipif_platform(["darwin"])
+    return skipIfPlatform(["darwin"])
 
 
 def skipif_linux():
-    return skipif_platform(["linux"])
+    return skipIfPlatform(["linux"])
 
 
 def skipIfWindows(func: Callable[..., T]):
-    return skipif_platform(["windows", "cygwin"])(func)
+    return skipIfPlatform(["windows", "cygwin"])(func)
 
 
 def skipUnlessDarwin(func: Callable[..., T]):
@@ -74,23 +87,34 @@ def skipUnlessDarwin(func: Callable[..., T]):
 
 
 def skipIfDarwin(func: Callable[..., T]):
-    return skipif_platform(["darwin"])(func)
+    return skipIfPlatform(["darwin"])(func)
 
 
 def skipIfLinux(func: Callable[..., T]):
-    return skipif_platform(["linux"])(func)
+    return skipIfPlatform(["linux"])(func)
+
+
+def no_debug_info_test(func: Callable[..., T]):
+    return func
+
+
+def skipUnlessUndefinedBehaviorSanitizer(func: Callable[..., T]):
+    return func
+
+def skipUnlessAddressSanitizer(func):
+    return func
 
 
 def skipIfNetBSD(func: Callable[..., T]):
-    return skipif_platform(["netbsd"])(func)
+    return skipIfPlatform(["netbsd"])(func)
 
 
 def skipIfRemote(func: Callable[..., T]):
-    return skipif_platform(["remote"])(func)
+    return skipIfPlatform(["remote"])(func)
 
 
 def skipIfAsan(func: Callable[..., T]):
-    return skipif_platform(["asan"])(func)
+    return skipIfPlatform(["asan"])(func)
 
 
 def skipIfBuildType(types: List[str]):
@@ -105,9 +129,10 @@ def skipIfBuildType(types: List[str]):
         "skip on {} build type(s)".format(", ".join(types)),
     )
 
+
 def skipIfTargetDoesNotSupportSharedLibraries():
     """Skip tests that require shared library (dylib/so) support."""
-    return skipif_platform(["wasi"])
+    return skipIfPlatform(["wasi"])
 
 
 def skipIf(
@@ -127,7 +152,8 @@ def skipIf(
     setting=None,
     asan=None,
 ):
-    return skipif_platform(["skipif"])
+    return skipIfPlatform(["skipif"])
+
 
 def add_test_categories(cat: List[str]):
     """Add test categories to a TestCase method"""
@@ -136,7 +162,7 @@ def add_test_categories(cat: List[str]):
     def impl(func: Callable[..., T]):
         try:
             if hasattr(func, "categories"):
-                cat.extend(func.categories) # type: ignore
+                cat.extend(func.categories)  # type: ignore
             setattr(func, "categories", cat)
         except AttributeError:
             raise Exception("Cannot assign categories to inline tests.")

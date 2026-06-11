@@ -3,8 +3,8 @@ Test lldb-dap command hooks
 """
 
 
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldb_dap.dap_types import AttachArgs, LaunchArgs
+from lldbsuite.test.tools.lldb_dap.dap_types import AttachArgs, LaunchArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 class TestDAP_commands(DAPTestCaseBase):
@@ -16,26 +16,27 @@ class TestDAP_commands(DAPTestCaseBase):
 
     def test_command_directive_quiet_on_success(self):
         program = self.getBuildArtifact("a.out")
-        command_quiet = (
+        quiet_command = (
             "settings set target.show-hex-variable-values-with-leading-zeroes false"
         )
-        command_not_quiet = (
+        visible_command = (
             "settings set target.show-hex-variable-values-with-leading-zeroes true"
         )
+        commands = [f"?{quiet_command}", visible_command]
         session = self.build_and_create_session()
-        process_event = session.launch_using_config(
+        process_event = session.launch(
             LaunchArgs(
                 program,
-                initCommands=["?" + command_quiet, command_not_quiet],
-                terminateCommands=["?" + command_quiet, command_not_quiet],
-                stopCommands=["?" + command_quiet, command_not_quiet],
-                exitCommands=["?" + command_quiet, command_not_quiet],
+                initCommands=commands,
+                terminateCommands=commands,
+                stopCommands=commands,
+                exitCommands=commands,
             )
         )
         session.verify_process_exited(after=process_event)
         full_output = session.get_console()
-        self.assertNotIn(command_quiet, full_output)
-        self.assertIn(command_not_quiet, full_output)
+        self.assertNotIn(quiet_command, full_output)
+        self.assertIn(visible_command, full_output)
 
     def do_test_abort_on_error(
         self,
@@ -44,15 +45,15 @@ class TestDAP_commands(DAPTestCaseBase):
         use_pre_run_commands: bool = False,
         use_post_run_commands: bool = False,
     ):
-        program = self.create_test_program_with_name("main.cpp")
-        command_quiet = (
+        program = self.getBuildArtifact("a.out")
+        quiet_command = (
             "settings set target.show-hex-variable-values-with-leading-zeroes false"
         )
-        command_abort_on_error = "settings set foo bar"
-        commands: list[str] = ["?!" + command_quiet, "!" + command_abort_on_error]
+        fake_command = "settings set foo bar"
+        commands = [f"?!{quiet_command}", f"!{fake_command}"]
 
         session = self.build_and_create_session()
-        session.initialize_and_launch(
+        pending_response = session.initialize_and_launch(
             LaunchArgs(
                 program,
                 initCommands=commands if use_init_commands else None,
@@ -62,9 +63,10 @@ class TestDAP_commands(DAPTestCaseBase):
             )
         )
         session.verify_configuration_done(use_post_run_commands)
+        pending_response.result_or_error()
         full_output = session.get_console()
-        self.assertNotIn(command_quiet, full_output)
-        self.assertIn(command_abort_on_error, full_output)
+        self.assertNotIn(quiet_command, full_output)
+        self.assertIn(fake_command, full_output)
 
     def test_command_directive_abort_on_error_init_commands(self):
         self.do_test_abort_on_error(use_init_commands=True)
@@ -79,20 +81,20 @@ class TestDAP_commands(DAPTestCaseBase):
         self.do_test_abort_on_error(use_post_run_commands=True)
 
     def test_command_directive_abort_on_error_attach_commands(self):
-        program = self.create_test_program_with_name("main.cpp")
-        command_quiet = (
+        program = self.getBuildArtifact("a.out")
+        quiet_command = (
             "settings set target.show-hex-variable-values-with-leading-zeroes false"
         )
-        command_abort_on_error = "settings set foo bar"
+        fake_command = "settings set foo bar"
         session = self.build_and_create_session()
         session.initialize_sequence(session.initialize_args)
+        session.collect_console
+        attach_args = AttachArgs(
+            program=program,
+            attachCommands=["?!" + quiet_command, "!" + fake_command],
+        )
         with self.assertRaises(AssertionError):
-            session.attach_and_configuration_done(
-                AttachArgs(
-                    program=program,
-                    attachCommands=["?!" + command_quiet, "!" + command_abort_on_error],
-                )
-            )
+            session.attach(attach_args)
         full_output = session.get_console()
-        self.assertNotIn(command_quiet, full_output)
-        self.assertIn(command_abort_on_error, full_output)
+        self.assertNotIn(quiet_command, full_output)
+        self.assertIn(fake_command, full_output)

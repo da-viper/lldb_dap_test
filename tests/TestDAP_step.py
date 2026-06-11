@@ -3,10 +3,10 @@ Test lldb-dap setBreakpoints request
 """
 
 
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldb_dap.dap_types import LaunchArgs
 from lldbsuite.test.decorators import skipIfWindows
 from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 class TestDAP_step(DAPTestCaseBase):
@@ -59,7 +59,7 @@ __attribute__((always_inline)) inline void inlined_fn() { not_inlined_fn(); }
         # Set breakpoint in the thread function so we can step the threads
         with session.configure(LaunchArgs(program)) as ctx:
             session.resolve_source_breakpoints(source, lines)
-        process_event = ctx.process_event()
+        process_event = ctx.process_event
         stop_event = session.verify_stopped_on_breakpoint(after=process_event)
 
         # We have a thread that is stopped at our breakpoint.
@@ -68,7 +68,7 @@ __attribute__((always_inline)) inline void inlined_fn() { not_inlined_fn(); }
         # correctly. If we step a thread correctly we will verify
         # the correct value for x as it progresses through the
         # program.
-        thread = session.get_thread_context(stop_event.body.threadId)
+        thread = session.thread_context_from(stop_event)
         top_frame = thread.top_frame()
         x1 = top_frame.locals["x"].value_as_int
         src1, line1 = top_frame.source_and_line()
@@ -125,20 +125,20 @@ __attribute__((always_inline)) inline void inlined_fn() { not_inlined_fn(); }
         step_over_pos = line_number(source, "// position_after_step_over")
         with session.configure(LaunchArgs(program)) as ctx:
             session.resolve_source_breakpoints(source, breakpoint_lines)
-        process_event = ctx.process_event()
+        process_event = ctx.process_event
         stop_event = session.verify_stopped_on_breakpoint(after=process_event)
 
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = session.thread_context_from(stop_event)
         thread_ctx.step_over()
         levels = 1
         frames = thread_ctx.frames(startFrame=0, levels=levels)
         self.assertEqual(len(frames), levels, "expect current number of frame levels.")
         top_frame = frames[0].frame
-        top_frame_source = self.expect_is_not_none(top_frame.source)
+        top_frame_source = self.expect_not_none(top_frame.source)
         self.assertEqual(
             top_frame_source.name, source_, "expect we are in the same file."
         )
-        top_frame_path = self.expect_is_not_none(top_frame_source.path)
+        top_frame_path = self.expect_not_none(top_frame_source.path)
         self.assertTrue(
             top_frame_path.endswith(source_),
             f"expect path ending with '{source_}'.",

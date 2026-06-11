@@ -2,13 +2,14 @@
 Test lldb-dap setBreakpoints request
 """
 
-import platform
 import os
-import sys
-from lldb_dap.dap_types import LaunchArgs
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+import platform
+
 from lldbsuite.test.decorators import skipIfWindows
 from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.session_helpers import ExpectEval
 
 
 def get_subprocess(root_process, process_name: str):
@@ -23,6 +24,8 @@ def get_subprocess(root_process, process_name: str):
 
 
 class TestDAP_console(DAPTestCaseBase):
+    USE_DEFAULT_DEBUG_ADAPTER = False
+
     TEST_PROGRAM = r"""
 int multiply(int x, int y) {
   return x * y; // breakpoint 1
@@ -64,9 +67,10 @@ Streams:
 
     def setUp(self):
         super().setUp()
-        self.session = self.build_and_create_session()
+        adapter = self.create_stdio_debug_adapter()
+        self._session = self.build_and_create_session(adapter)
 
-    def build(self):
+    def build(self, filename=None):
         self.create_test_program_with_name("main.cpp")
         self.create_file(self.MINI_DUMP_YAML, "minidump.yaml")
 
@@ -77,7 +81,7 @@ Streams:
         assert_msg: str,
         command_escape_prefix: str = "`",
     ):
-        response = self.session.evaluate(
+        response = self._session.evaluate(
             f"{command_escape_prefix}{lldb_command}", context="repl"
         )
         output = response.result
@@ -105,7 +109,7 @@ Streams:
         evaluated and the lldb commands that start with the backtick
         character.
         """
-        session = self.session
+        session = self._session
         program = self.getBuildArtifact("a.out")
         source = "main.cpp"
         # Set breakpoint in the thread function so we can step the threads
@@ -113,12 +117,12 @@ Streams:
         lines = [breakpoint1_line]
         with session.configure(LaunchArgs(program)) as ctx:
             bp_ids = session.resolve_source_breakpoints(source, lines)
-        process_event = ctx.process_event()
+        process_event = ctx.process_event
         stop_event = session.verify_stopped_on_breakpoint(bp_ids, after=process_event)
 
         # Cause a "scopes" to be sent for frame zero which should update the
         # selected thread and frame to frame 0.
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = session.thread_context_from(stop_event)
         frame_ctxs = thread_ctx.frames()
         frame_ctxs[0].locals.variables()
 
@@ -139,14 +143,14 @@ Streams:
         session.continue_to_exit()
 
     def test_custom_escape_prefix(self):
-        session = self.session
+        session = self._session
         program = self.getBuildArtifact("a.out")
         with session.configure(LaunchArgs(program, commandEscapePrefix="::")) as ctx:
             source = "main.cpp"
             breakpoint1_line = line_number(source, "// breakpoint 1")
             bp_ids = session.resolve_source_breakpoints(source, [breakpoint1_line])
 
-        process_event = ctx.process_event()
+        process_event = ctx.process_event
         session.verify_stopped_on_breakpoint(bp_ids, after=process_event)
 
         self.check_lldb_command(
@@ -158,7 +162,7 @@ Streams:
         session.continue_to_exit()
 
     def test_empty_escape_prefix(self):
-        session = self.session
+        session = self._session
         program = self.getBuildArtifact("a.out")
         source = "main.cpp"
         breakpoint1_line = line_number(source, "// breakpoint 1")
@@ -166,7 +170,7 @@ Streams:
             breakpoint_ids = session.resolve_source_breakpoints(
                 source, [breakpoint1_line]
             )
-        process_event = ctx.process_event()
+        process_event = ctx.process_event
         session.verify_stopped_on_breakpoint(breakpoint_ids, after=process_event)
 
         self.check_lldb_command(
@@ -180,14 +184,14 @@ Streams:
     @skipIfWindows
     def test_exit_status_message_sigterm(self):
         source = "main.cpp"
-        session = self.session
+        session = self._session
         program = self.getBuildArtifact("a.out")
         breakpoint1_line = line_number(source, "// breakpoint 1")
         with session.configure(LaunchArgs(program, commandEscapePrefix="")) as ctx:
             breakpoint_ids = session.resolve_source_breakpoints(
                 source, [breakpoint1_line]
             )
-        process_event = ctx.process_event()
+        process_event = ctx.process_event
         stop_event = session.verify_stopped_on_breakpoint(
             breakpoint_ids, after=process_event
         )
@@ -210,9 +214,7 @@ Streams:
         process.wait()
 
         # Get the console output
-        captured = session.collect_console_until(
-            pattern="exited with status", after=stop_event
-        )
+        captured = session.collect_console(after=stop_event, until="exited with status")
 
         # Verify the exit status message is printed.
         self.assertRegex(
@@ -223,14 +225,14 @@ Streams:
 
     def test_exit_status_message_ok(self):
         program = self.getBuildArtifact("a.out")
-        process_event = self.session.launch_using_config(
+        process_event = self._session.launch(
             LaunchArgs(program, commandEscapePrefix="")
         )
-        self.session.verify_process_exited()
+        self._session.verify_process_exited()
 
         # Get the console output
-        captured = self.session.collect_console_until(
-            pattern="exited with status", after=process_event
+        captured = self._session.collect_console(
+            after=process_event, until="exited with status"
         )
 
         # Verify the exit status message is printed.
@@ -241,18 +243,16 @@ Streams:
         )
 
     def test_diagnositcs(self):
-        session = self.session
+        session = self._session
         program = self.getBuildArtifact("a.out")
-        process_event = session.launch_using_config(
-            LaunchArgs(program, stopOnEntry=True)
-        )
+        process_event = session.launch(LaunchArgs(program, stopOnEntry=True))
         stop_event = session.verify_stopped_on_entry(after=process_event)
 
         core = self.getBuildArtifact("minidump.core")
         self.yaml2obj("minidump.yaml", core)
         session.evaluate(f"target create --core  {core}", context="repl")
 
-        captured = session.collect_important_until("minidump file", after=stop_event)
+        captured = session.collect_important(after=stop_event, until="minidump file")
 
         self.assertIn(
             "warning: unable to retrieve process ID from minidump file",

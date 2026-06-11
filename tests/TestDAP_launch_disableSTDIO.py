@@ -3,9 +3,9 @@ Test lldb-dap launch request.
 """
 
 
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldb_dap.dap_types import LaunchArgs
 from lldbsuite.test.decorators import skipIfWindows
+from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 class TestDAP_launch_disableSTDIO(DAPTestCaseBase):
@@ -39,7 +39,7 @@ int main(int argc, char const *argv[], char const *envp[]) {
     def test(self):
         program = self.getBuildArtifact("a.out")
         session = self.build_and_create_session()
-        session.launch_using_config(LaunchArgs(program=program, disableSTDIO=True))
+        session.launch(LaunchArgs(program=program, disableSTDIO=True))
         session.verify_process_exited()
 
         # Now get the STDOUT and verify our program argument is correct

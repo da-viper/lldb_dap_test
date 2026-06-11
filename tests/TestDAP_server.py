@@ -7,17 +7,22 @@ import signal
 import tempfile
 import time
 from concurrent import futures
-from unittest import skip
 
-from lldb_dap.dap_types import Event, ExitedEvent, LaunchArgs, TerminatedEvent
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldb_dap.session_helpers import DAPTestSession
-from lldb_dap.utils import DebugAdapterOptions
 from lldbsuite.test.decorators import skipIfWindows
 from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap.dap_types import (
+    Event,
+    ExitedEvent,
+    LaunchArgs,
+    TerminatedEvent,
+)
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.session_helpers import DAPTestSession
+from lldbsuite.test.tools.lldb_dap.utils import DebugAdapterOptions
 
 
 class TestDAP_server(DAPTestCaseBase):
+    USE_DEFAULT_DEBUG_ADAPTER = False
     TEST_PROGRAM = r"""
 #include <stdio.h>
 
@@ -33,8 +38,7 @@ int main(int argc, char const *argv[]) {
     IS_C = True
 
     def start_server(self, connection: str, connection_timeout: int = 30):
-        adapter = self.create_adapter_in_server_mode(
-            DebugAdapterOptions(),
+        adapter = self.create_server_debug_adapter(
             connection=connection,
             connection_timeout=connection_timeout,
         )
@@ -53,12 +57,12 @@ int main(int argc, char const *argv[]) {
         if sleep_seconds_in_middle:
             time.sleep(sleep_seconds_in_middle)
 
-        session.verify_stopped_on_breakpoint(after=ctx.process_event())
+        session.verify_stopped_on_breakpoint(after=ctx.process_event)
         session.continue_to_exit()
         output = session.get_stdout()
         self.assertEqual(output, f"Hello {name}!\r\n")
 
-        session.do_disconnect()
+        session.disconnect()
 
     @skipIfWindows
     def test_server_port(self):
@@ -80,14 +84,14 @@ int main(int argc, char const *argv[]) {
                 session_future.result()
 
     @skipIfWindows
-    @skip("FLAKY")
     def test_server_unix_socket(self):
         """
         Test launching a binary with a lldb-dap in server mode on a unix socket.
         """
         self.build()
-        socket_path = f"{tempfile.gettempdir()}/dap-connection-{os.getpid()}"
-        self.addTearDownHook(lambda: os.unlink(socket_path))
+        temp_dir = tempfile.TemporaryDirectory()
+        socket_path = os.path.join(temp_dir.name, f"dap-connection-{os.getpid()}")
+        self.addTearDownHook(temp_dir.cleanup)
 
         adapter = self.start_server(connection="accept://" + socket_path)
 
@@ -118,7 +122,7 @@ int main(int argc, char const *argv[]) {
         with session.configure(LaunchArgs(program, args=["Alice"])) as ctx:
             session.resolve_source_breakpoints(source, [breakpoint_line])
 
-        stop_event = session.verify_stopped_on_breakpoint(after=ctx.process_event())
+        stop_event = session.verify_stopped_on_breakpoint(after=ctx.process_event)
 
         # Interrupt the server which should disconnect all clients.
         adapter.process.send_signal(signal.SIGINT)
@@ -214,18 +218,18 @@ int main(int argc, char const *argv[]) {
         with session1.configure(launch_args) as ctx1:
             [breakpoint1] = session1.resolve_source_breakpoints(source, [bp1_line])
 
-        session1.verify_stopped_on_breakpoint([breakpoint1], after=ctx1.process_event())
+        session1.verify_stopped_on_breakpoint(breakpoint1, after=ctx1.process_event)
 
         # Start the second session and stop at breakpoint 2.
         bp2_line = line_number(source, "// breakpoint 2")
         with session2.configure(launch_args) as ctx2:
             [breakpoint2] = session2.resolve_source_breakpoints(source, [bp2_line])
 
-        session2.verify_stopped_on_breakpoint([breakpoint2], after=ctx2.process_event())
+        session2.verify_stopped_on_breakpoint(breakpoint2, after=ctx2.process_event)
 
         # Start and finish the third session with no breakpoint.
         session3 = self.create_session(adapter)  # with no breakpoint.
-        process_event3 = session3.launch_using_config(launch_args)
+        process_event3 = session3.launch(launch_args)
         session3.verify_process_exited(after=process_event3)
 
         # Finishing session1 and session2 should not hit any breakpoint.

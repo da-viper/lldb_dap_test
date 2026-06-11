@@ -2,10 +2,10 @@
 Test lldb-dap dataBreakpointInfo and setDataBreakpoints requests
 """
 
-from lldb_dap.dap_types import DataBreakpoint, LaunchArgs
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldbsuite.test.decorators import skipIfWindows
 from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap.dap_types import DataBreakpoint, LaunchArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 class TestDAP_setDataBreakpoints(DAPTestCaseBase):
@@ -20,18 +20,18 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
         first_loop_break_line = line_number(source, "// first loop breakpoint")
         with session.configure(LaunchArgs(program)) as ctx:
             session.resolve_source_breakpoints(source, [first_loop_break_line])
-        process_event = ctx.process_event()
+        process_event = ctx.process_event
         stop_event = session.verify_stopped_on_breakpoint(after=process_event)
 
         # Test setting write watchpoint using expressions: &x, arr+2
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = session.thread_context_from(stop_event)
         top_frame_id = thread_ctx.top_frame().frame.id
         response_x = session.data_breakpoint_info("&x", 0, top_frame_id)
         response_arr_2 = session.data_breakpoint_info("arr+2", 0, top_frame_id)
 
         # Test response from dataBreakpointInfo request.
-        x_data_id = self.expect_is_not_none(response_x.body.dataId)
-        arr_2_data_id = self.expect_is_not_none(response_arr_2.body.dataId)
+        x_data_id = self.expect_not_none(response_x.body.dataId)
+        arr_2_data_id = self.expect_not_none(response_arr_2.body.dataId)
         self.assertEqual(x_data_id.split("/")[1], "4")
         self.assertEqual(response_x.body.accessTypes, self.ACCESS_TYPES)
         self.assertEqual(arr_2_data_id.split("/")[1], "4")
@@ -51,9 +51,9 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
         self.assertTrue(breakpoints[1].verified)
         self.assertTrue(breakpoints[2].verified)
 
-        breakpoint2_id = self.expect_is_not_none(breakpoints[2].id)
+        breakpoint2_id = self.expect_not_none(breakpoints[2].id)
         stop_event = session.continue_to_any_breakpoint([breakpoint2_id])
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = session.thread_context_from(stop_event)
         top_frame_ctx = thread_ctx.top_frame()
 
         x_val = top_frame_ctx.locals["x"]
@@ -61,10 +61,10 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
         self.assertEqual(x_val.value, "2")
         self.assertEqual(i_val.value, "1")
 
-        breakpoint1_id = self.expect_is_not_none(breakpoints[1].id)
+        breakpoint1_id = self.expect_not_none(breakpoints[1].id)
         stop_event = session.continue_to_any_breakpoint([breakpoint1_id])
 
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = session.thread_context_from(stop_event)
         top_frame_ctx = thread_ctx.top_frame()
         # TODO: simplify this to (get_local_variable("arr").get_child("[2]"))
         arr = top_frame_ctx.locals["arr"]
@@ -85,18 +85,18 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
         first_loop_break_line = line_number(source, "// first loop breakpoint")
         with session.configure(LaunchArgs(program)) as ctx:
             session.resolve_source_breakpoints(source, [first_loop_break_line])
-        process_event = ctx.process_event()
+        process_event = ctx.process_event
         stop_event = session.verify_stopped_on_breakpoint(after=process_event)
 
         # Test setting write watchpoint using expressions: &x, arr+2
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = session.thread_context_from(stop_event)
         top_frame_id = thread_ctx.top_frame().frame.id
         response_x = session.data_breakpoint_info("&x", 0, top_frame_id)
         response_arr_2 = session.data_breakpoint_info("arr+2", 0, top_frame_id)
 
         # Test response from dataBreakpointInfo request.
-        response_x_data_id = self.expect_is_not_none(response_x.body.dataId)
-        response_arr_2_data_id = self.expect_is_not_none(response_arr_2.body.dataId)
+        response_x_data_id = self.expect_not_none(response_x.body.dataId)
+        response_arr_2_data_id = self.expect_not_none(response_arr_2.body.dataId)
         self.assertEqual(response_x_data_id.split("/")[1], "4")
         self.assertEqual(response_x.body.accessTypes, self.ACCESS_TYPES)
         self.assertEqual(response_arr_2_data_id.split("/")[1], "4")
@@ -112,9 +112,10 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
         self.assertTrue(breakpoints[0].verified)
         self.assertTrue(breakpoints[1].verified)
 
-        breakpoint0_id = self.expect_is_not_none(breakpoints[0].id)
+        breakpoint0_id = self.expect_not_none(breakpoints[0].id)
+        # TODO: flaky here, hitting the second breakpoint below.
         stop_event = session.continue_to_any_breakpoint([breakpoint0_id])
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = session.thread_context_from(stop_event)
         top_frame_ctx = thread_ctx.top_frame()
 
         x_val = top_frame_ctx.locals["x"]
@@ -122,10 +123,10 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
         self.assertEqual(x_val.value, "2")
         self.assertEqual(i_val.value, "1")
 
-        breakpoint1_id = self.expect_is_not_none(breakpoints[1].id)
+        breakpoint1_id = self.expect_not_none(breakpoints[1].id)
         stop_event = session.continue_to_any_breakpoint([breakpoint1_id])
 
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = session.thread_context_from(stop_event)
         top_frame_ctx = thread_ctx.top_frame()
         # TODO: simplify this to (get_local_variable("arr").get_child("[2]"))
         arr = top_frame_ctx.locals["arr"]
@@ -146,22 +147,22 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
         first_loop_break_line = line_number(source, "// first loop breakpoint")
         with session.configure(LaunchArgs(program)) as ctx:
             session.resolve_source_breakpoints(source, [first_loop_break_line])
-        process_event = ctx.process_event()
+        process_event = ctx.process_event
         stop_event = session.verify_stopped_on_breakpoint(after=process_event)
 
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = session.thread_context_from(stop_event)
         top_frame_ctx = thread_ctx.top_frame()
         locals_ref = top_frame_ctx.locals.variablesReference
         # Test write watchpoints on x, arr[2]
         frame_id = top_frame_ctx.frame.id
         response_x = session.data_breakpoint_info("x", locals_ref, frame_id)
         arr = top_frame_ctx.locals["arr"]
-        arr_var_ref = self.expect_is_not_none(arr.variablesReference)
+        arr_var_ref = self.expect_not_none(arr.variablesReference)
         response_arr_2 = session.data_breakpoint_info("[2]", arr_var_ref, frame_id)
 
         # Test response from dataBreakpointInfo request.
-        x_data_id = self.expect_is_not_none(response_x.body.dataId)
-        response_arr_2_data_id = self.expect_is_not_none(response_arr_2.body.dataId)
+        x_data_id = self.expect_not_none(response_x.body.dataId)
+        response_arr_2_data_id = self.expect_not_none(response_arr_2.body.dataId)
         self.assertEqual(x_data_id.split("/")[1], "4")
         self.assertEqual(response_x.body.accessTypes, self.ACCESS_TYPES)
         self.assertEqual(response_arr_2_data_id.split("/")[1], "4")
@@ -177,9 +178,9 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
         self.assertTrue(breakpoints[0].verified)
         self.assertTrue(breakpoints[1].verified)
 
-        breakpoint0_id = self.expect_is_not_none(breakpoints[0].id)
+        breakpoint0_id = self.expect_not_none(breakpoints[0].id)
         stop_event = session.continue_to_any_breakpoint([breakpoint0_id])
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = session.thread_context_from(stop_event)
         top_frame_ctx = thread_ctx.top_frame()
 
         x_var = top_frame_ctx.locals["x"]
@@ -187,10 +188,10 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
         self.assertEqual(x_var.value, "2")
         self.assertEqual(i_val.value, "1")
 
-        breakpoint1_id = self.expect_is_not_none(breakpoints[1].id)
+        breakpoint1_id = self.expect_not_none(breakpoints[1].id)
         stop_event = session.continue_to_any_breakpoint([breakpoint1_id])
 
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = session.thread_context_from(stop_event)
         top_frame_ctx = thread_ctx.top_frame()
         # TODO: simplify this to (get_local_variable("arr").get_child("[2]"))
         arr_2 = top_frame_ctx.locals["arr"]["[2]"]
@@ -213,10 +214,10 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
         breakpoints = set_response.body.breakpoints
         self.assertEqual(len(breakpoints), len(data_breakpoints))
         self.assertTrue(breakpoints[0].verified)
-        breakpoint0_id = self.expect_is_not_none(breakpoints[0].id)
+        breakpoint0_id = self.expect_not_none(breakpoints[0].id)
         stop_event = session.continue_to_any_breakpoint([breakpoint0_id])
 
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = session.thread_context_from(stop_event)
         top_frame_ctx = thread_ctx.top_frame()
         x_var = top_frame_ctx.locals["x"]
         self.assertEqual(x_var.value, "3")
@@ -229,10 +230,10 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
         breakpoints = set_response.body.breakpoints
         self.assertEqual(len(breakpoints), len(data_breakpoints))
         self.assertTrue(breakpoints[0].verified)
-        breakpoint0_id = self.expect_is_not_none(breakpoints[0].id)
+        breakpoint0_id = self.expect_not_none(breakpoints[0].id)
         stop_event = session.continue_to_any_breakpoint([breakpoint0_id])
 
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = session.thread_context_from(stop_event)
         top_frame_ctx = thread_ctx.top_frame()
         x_var = top_frame_ctx.locals["x"]
         self.assertEqual(x_var.value, "10")
@@ -246,26 +247,26 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
         first_loop_break_line = line_number(source, "// first loop breakpoint")
         with session.configure(LaunchArgs(program)) as ctx:
             session.resolve_source_breakpoints(source, [first_loop_break_line])
-        process_event = ctx.process_event()
+        process_event = ctx.process_event
         stop_event = session.verify_stopped_on_breakpoint(after=process_event)
 
         # Test write watchpoints on x, arr[2]
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = session.thread_context_from(stop_event)
         top_frame_ctx = thread_ctx.top_frame()
         x = top_frame_ctx.locals["x"]
-        x_memory_reference = self.expect_is_not_none(x.memoryReference)
+        x_memory_reference = self.expect_not_none(x.memoryReference)
         response_x = session.data_breakpoint_info_as_address(x_memory_reference, 4)
         arr = top_frame_ctx.locals["arr"]
         arr_2 = arr["[2]"]
-        arr_2_mem_ref = self.expect_is_not_none(arr_2.memoryReference)
+        arr_2_mem_ref = self.expect_not_none(arr_2.memoryReference)
         response_arr_2 = session.data_breakpoint_info_as_address(arr_2_mem_ref, 4)
 
         # Test response from dataBreakpointInfo request.
-        x_data_id = self.expect_is_not_none(response_x.body.dataId)
+        x_data_id = self.expect_not_none(response_x.body.dataId)
         self.assertEqual(x_data_id.split("/"), [x_memory_reference[2:], "4"])
         self.assertEqual(response_x.body.accessTypes, self.ACCESS_TYPES)
-        arr_2_data_id = self.expect_is_not_none(response_arr_2.body.dataId)
-        arr_2_mem_ref = self.expect_is_not_none(arr_2.memoryReference)
+        arr_2_data_id = self.expect_not_none(response_arr_2.body.dataId)
+        arr_2_mem_ref = self.expect_not_none(arr_2.memoryReference)
         self.assertEqual(arr_2_data_id.split("/"), [arr_2_mem_ref[2:], "4"])
         self.assertEqual(response_arr_2.body.accessTypes, self.ACCESS_TYPES)
 
@@ -279,9 +280,9 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
         self.assertTrue(breakpoints[0].verified)
         self.assertTrue(breakpoints[1].verified)
 
-        breakpoint0_id = self.expect_is_not_none(breakpoints[0].id)
+        breakpoint0_id = self.expect_not_none(breakpoints[0].id)
         stop_event = session.continue_to_any_breakpoint([breakpoint0_id])
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = session.thread_context_from(stop_event)
         top_frame_ctx = thread_ctx.top_frame()
 
         x_val = top_frame_ctx.locals["x"]
@@ -289,10 +290,10 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
         self.assertEqual(x_val.value, "2")
         self.assertEqual(i_val.value, "1")
 
-        breakpoint1_id = self.expect_is_not_none(breakpoints[1].id)
+        breakpoint1_id = self.expect_not_none(breakpoints[1].id)
         stop_event = session.continue_to_any_breakpoint([breakpoint1_id])
 
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = session.thread_context_from(stop_event)
         top_frame_ctx = thread_ctx.top_frame()
         # TODO: simplify this to (get_local_variable("arr").get_child("[2]"))
         arr = top_frame_ctx.locals["arr"]
@@ -303,7 +304,6 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
 
         session.set_data_breakpoints([])
         session.continue_to_exit()
-
 
     TEST_PROGRAM = r"""
 int main(int argc, char const *argv[]) {

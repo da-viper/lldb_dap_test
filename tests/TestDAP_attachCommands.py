@@ -2,9 +2,9 @@
 Test lldb-dap attach commands
 """
 
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldb_dap.dap_types import AttachArgs, PauseArgs, StoppedReason
 from lldbsuite.test.decorators import skipIfNetBSD
+from lldbsuite.test.tools.lldb_dap.dap_types import AttachArgs, PauseArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 ATTACH_H = r"""
 #ifndef LLDB_TEST_ATTACH_H
@@ -85,7 +85,7 @@ lldb_enable_attach();
 """
 
     @skipIfNetBSD  # Hangs on NetBSD as well
-    def _test_commands(self):
+    def test_commands(self):
         # TODO: this test is still flaky and it is not because of dap but the pause
         # I don't need to stop the process again after a pause.
         """
@@ -126,7 +126,7 @@ lldb_enable_attach();
         exitCommands = ["expr 2+3", "expr 3+4"]
         terminateCommands = ["expr 4+2"]
 
-        process_event = session.attach_using_config(
+        process_event = session.attach(
             AttachArgs(
                 program=program,
                 attachCommands=attachCommands,
@@ -151,9 +151,9 @@ lldb_enable_attach();
         session.verify_commands("postRunCommands", output, postRunCommands)
 
         stopped_event = session.verify_stopped_on_entry(after=process_event)
-        stopped_thread_id = self.expect_is_not_none(stopped_event.body.threadId)
+        stopped_thread_id = self.expect_not_none(stopped_event.body.threadId)
 
-        output = session.collect_console_until(stopCommands[-1], after=stopped_event)
+        output = session.collect_console(after=stopped_event, until=stopCommands[-1])
         session.verify_commands("stopCommands", output.seen_texts, stopCommands)
 
         # Continue after launch and hit the "pause()" call and stop the target.
@@ -162,11 +162,11 @@ lldb_enable_attach();
         session.do_continue()
 
         # use the printed pid to synchronize when change the ready variable.
-        session.collect_stdout_until("infinite loop started", after=output.event)
-        pause_response = session.request_and_respond(PauseArgs(stopped_thread_id))
+        session.collect_stdout(after=output.event, until="infinite loop started")
+        pause_response = session.send_request(PauseArgs(stopped_thread_id)).result()
         stopped_event = session.wait_for_stopped(after=pause_response)
 
-        output = session.collect_console_until(stopCommands[-1], after=output.event)
+        output = session.collect_console(after=output.event, until=stopCommands[-1])
         session.verify_commands("stopCommands", output.seen_texts, stopCommands)
 
         # set the ready variable so that the process can continue to exit.
@@ -178,7 +178,7 @@ lldb_enable_attach();
         # Get output from the console. This should contain both the
         # "exitCommands" that were run after the second breakpoint was hit
         # and the "terminateCommands" due to the debugging session ending
-        output = session.collect_console_until(terminateCommands[0], after=output.event)
+        output = session.collect_console(after=output.event, until=terminateCommands[0])
         session.verify_commands("exitCommands", output.seen_texts, exitCommands)
         session.verify_commands(
             "terminateCommands", output.seen_texts, terminateCommands
@@ -199,27 +199,25 @@ lldb_enable_attach();
             attachCommands=attachCommands,
         )
         attach_handle = session.send_request(attach_args)
-        with self.assertRaises(Exception):  # TODO: specialize exception
-            session.verify_configuration_done()
+        session.verify_configuration_done(expected_success=False)
 
-        attach_response = session.get_error_response(attach_handle)
+        attach_response = attach_handle.error()
         self.assertFalse(attach_response.success)
-        response_error = self.expect_is_not_none(attach_response.body.error)
+        response_error = self.expect_not_none(attach_response.body.error)
         self.assertIn(
             "attachCommands failed to attach to a process", response_error.format
         )
 
-    # @skipIfNetBSD  # Hangs on NetBSD as well
-    def test_terminate_commands(
-        self,
-    ):  # TODO: do not use expression terminate commands.
+    @skipIfNetBSD  # Hangs on NetBSD as well
+    def test_terminate_commands(self):
+        # TODO: do not use expression in terminate commands.
         """
         Tests that the "terminateCommands", that can be passed during
         attach, are run when the debugger is disconnected.
         """
         self.create_file(ATTACH_H, "attach.h")
         program = self.getBuildArtifact("a.out")
-        session = self.build_and_create_session()
+        session = self.build_and_create_session(disconnect_automatically=False)
 
         # Here we just create a target and launch the process as a way to test
         # if we are able to use attach commands to create any kind of a target
@@ -229,7 +227,7 @@ lldb_enable_attach();
             "process launch --stop-at-user-entry",
         ]
         terminateCommands = ["history -c 1"]
-        process_event = session.attach_using_config(
+        process_event = session.attach(
             AttachArgs(
                 program=program,
                 attachCommands=attachCommands,
@@ -238,9 +236,9 @@ lldb_enable_attach();
         )
         # Once it's disconnected the console should contain the
         # "terminateCommands"
-        session.do_disconnect(terminateDebuggee=True)
-        output = session.collect_console_until(
-            terminateCommands[0], after=process_event
+        session.disconnect(terminateDebuggee=True)
+        output = session.collect_console(
+            after=process_event, until=terminateCommands[0]
         )
         session.verify_commands(
             "terminateCommands", output.seen_texts, terminateCommands

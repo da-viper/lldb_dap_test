@@ -2,8 +2,8 @@
 Test lldb-dap launch request.
 """
 
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 class TestDAP_launch_args(DAPTestCaseBase):
@@ -36,7 +36,7 @@ int main(int argc, char const *argv[], char const *envp[]) {
         program = self.getBuildArtifact("a.out")
         args = ["one", "with space", "'with single quotes'", '"with double quotes"']
         session = self.build_and_create_session()
-        session.launch_using_config(LaunchArgs(program=program, args=args))
+        session.launch(LaunchArgs(program=program, args=args))
         session.verify_process_exited()
 
         output = session.get_stdout()

@@ -3,8 +3,8 @@ Test stop hooks
 """
 
 
-from lldb_dap.dap_types import LaunchArgs
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 class TestDAP_stop_hooks(DAPTestCaseBase):
@@ -27,6 +27,6 @@ class TestDAP_stop_hooks(DAPTestCaseBase):
         # command interpreter is in synchronous mode while lldb-dap expects
         # it to be in asynchronous mode, so, the process doesn't send the stop
         # event to "lldb.Debugger" listener (which is monitored by lldb-dap).
-        session.verify_stopped_on_breakpoint(breakpoint_ids, after=ctx.process_event())
+        session.verify_stopped_on_breakpoint(breakpoint_ids, after=ctx.process_event)
 
         session.continue_to_exit()

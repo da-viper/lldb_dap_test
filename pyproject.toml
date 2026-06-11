@@ -24,5 +24,5 @@ profile = "black"
 testpaths = ["tests"]
 norecursedirs = ["lldb_dap"]
 python_files = ["Test*.py"]
-addopts = ["--durations=7"]
+addopts = ["--durations=10", "--dist=loadscope"]
 verbosity_test_cases = "2"

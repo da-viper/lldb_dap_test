@@ -1,7 +1,5 @@
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldb_dap.dap_types import (
-    LaunchArgs,
-)
+from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 class TestDAP_launch_basic(DAPTestCaseBase):
@@ -35,7 +33,7 @@ int main(int argc, char const *argv[], char const *envp[]) {
     def test(self):
         program = self.getBuildArtifact("a.out")
         session = self.build_and_create_session()
-        process_event = session.launch_using_config(LaunchArgs(program=program))
+        process_event = session.launch(LaunchArgs(program=program))
         session.verify_process_exited(after=process_event)
 
         # Now get the STDOUT and verify our program argument is correct

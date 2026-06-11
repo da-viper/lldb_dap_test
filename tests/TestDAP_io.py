@@ -3,9 +3,7 @@ Test lldb-dap IO handling.
 """
 
 
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldb_dap.utils import DebugAdapterOptions
-
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 EXIT_FAILURE = 1
 EXIT_SUCCESS = 0
@@ -13,7 +11,7 @@ EXIT_SUCCESS = 0
 
 class TestDAP_io(DAPTestCaseBase):
     def launch(self):
-        adapter = self.create_adapter_in_stdio_mode(DebugAdapterOptions())
+        adapter = self.create_stdio_debug_adapter()
         self.assertTrue(adapter.is_alive)
         self.assertIsNotNone(adapter.process)
         process = adapter.process

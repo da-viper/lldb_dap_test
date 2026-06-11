@@ -3,7 +3,7 @@ import unittest
 from dataclasses import dataclass, field
 from typing import Dict, List, Literal, Optional, Tuple, Type, TypeVar, Union, cast
 
-from lldb_dap.dap_types import (
+from lldbsuite.test.tools.lldb_dap.dap_types import (
     EmptyBodyResponse,
     Event,
     EventName,
@@ -27,7 +27,7 @@ _ColorNumberOrString = Literal[Literal["ONE", "TWO", Literal["THREE"]], _ColorOr
 
 
 class TestDAPTypes(unittest.TestCase):
-    """TODO:"""
+    """Test serialization and deserialization of different dap types."""
 
     def verify_round_trip(self, value_type: Type, value: dict):
         message = dict_to_message(value_type, value)
@@ -126,7 +126,7 @@ class TestDAPTypes(unittest.TestCase):
 
     def test_failing_encode_and_decode(self):
         """Test encoding will fail if the type or value is wrong."""
-        # Missing type.
+        # Verify missing field type.
         with self.assertRaises(TypeError):
             configuration_request_dict = {
                 "command": "configurationDone",
@@ -238,7 +238,6 @@ class TestDAPTypes(unittest.TestCase):
             a_dict = {"value": 100}  # Not part of the specified literals.
             self.verify_round_trip(NestedLiterals, a_dict)
 
-    # TODO:
     def test_unions(self):
         """Test that Union types encodes and decodes correctly"""
 
@@ -336,7 +335,6 @@ class TestDAPTypes(unittest.TestCase):
             # bool not accepted as int, even though it is a base class.
             dict_to_message(WithOptionalUnion, {"value": True})
 
-    # TODO:
     def test_field_alias(self):
         """Test that renaming in a DAP field serializes and deserializes correctly"""
 
@@ -389,7 +387,7 @@ class TestDAPTypes(unittest.TestCase):
         with self.assertRaises(ValueError):
             dict_to_message(WithRequiredInt, {"version": 3})
 
-        # required and alias metadata can be combined.
+        # Test 'required' and 'alias' metadata can be combined.
         @dataclass
         class WithRequiredAlias:
             kind: str = field(metadata={"required": "PURPLE", "alias": "type"})

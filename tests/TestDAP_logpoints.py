@@ -1,0 +1,272 @@
+"""
+Test lldb-dap logpoints feature.
+"""
+
+import sys
+
+from lldbsuite.test.decorators import skipIfWindows
+from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap.dap_types import (
+    LaunchArgs,
+    SourceBreakpoint,
+    StoppedEvent,
+)
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.session_helpers import DAPTestSession
+
+
+class TestDAP_logpoints(DAPTestCaseBase):
+    TEST_PROGRAM = r"""#include <dlfcn.h>
+#include <stdexcept>
+#include <stdio.h>
+
+int twelve(int i) {
+  return 12 + i; // break 12
+}
+
+int thirteen(int i) {
+  return 13 + i; // break 13
+}
+
+namespace a {
+int fourteen(int i) {
+  return 14 + i; // break 14
+}
+} // namespace a
+int main(int argc, char const *argv[]) {
+#if defined(__APPLE__)
+  const char *libother_name = "libother.dylib";
+#else
+  const char *libother_name = "libother.so";
+#endif
+
+  void *handle = dlopen(libother_name, RTLD_NOW);
+  if (handle == nullptr) {
+    fprintf(stderr, "%s\n", dlerror());
+    exit(1);
+  }
+
+  const char *message = "Hello from main!";
+  int (*foo)(int) = (int (*)(int))dlsym(handle, "foo");
+  if (foo == nullptr) {
+    fprintf(stderr, "%s\n", dlerror());
+    exit(2);
+  } // break non-breakpointable line
+  foo(12); // before loop
+
+  for (int i = 0; i < 10; ++i) {
+    int x = twelve(i) + thirteen(i) + a::fourteen(i); // break loop
+  }
+  printf("%s\n", message);
+  try {
+    throw std::invalid_argument("throwing exception for testing");
+  } catch (...) {
+    puts("caught exception...");
+  }
+  return 0; // after loop
+}
+
+"""
+    OTHER_C = r"""extern int foo(int x) {
+  int y = x + 42; // break other
+  int z = y + 42;
+  return z;
+}
+"""
+
+    def build(self, filename=None):
+        other = self.create_file(self.OTHER_C, "other.c")
+        shared_lib_name = "libother.so" if sys.platform == "linux" else "libother.dylib"
+        self.run_command(
+            [
+                "/usr/bin/clang",
+                "-fPIC",
+                "-g",
+                "-shared",
+                other,
+                "-o",
+                self.getBuildArtifact(shared_lib_name),
+            ]
+        )
+
+        program_path = self.create_file(self.TEST_PROGRAM, "main.cpp")
+        self.run_command(
+            [
+                "/usr/bin/clang++",
+                "-fPIC",
+                "-g",
+                program_path,
+                f"-Wl,-rpath,{self.test_dir}",
+                "-ldl",
+                "-o",
+                self.getBuildArtifact("a.out"),
+            ]
+        )
+
+    def _stop_before_loop(self, session: DAPTestSession) -> StoppedEvent:
+        """Launch, set a breakpoint at 'before loop', and stop there.
+
+        Returns the initial stopped event. Callers use it as the
+        synchronization reference for collecting log OutputEvents that arrive
+        later
+        """
+        source = self.getSourcePath("main.cpp")
+        before_loop_line = line_number(source, "// before loop")
+        program = self.getBuildArtifact("a.out")
+        with session.configure(LaunchArgs(program)) as ctx:
+            [bp] = session.resolve_source_breakpoints(source, [before_loop_line])
+
+        return session.verify_stopped_on_breakpoint(bp, after=ctx.process_event)
+
+    def _filter_lines(self, text: str, prefix: str):
+        return [line for line in text.splitlines() if line.startswith(prefix)]
+
+    @skipIfWindows
+    def test_logmessage_basic(self):
+        """Tests breakpoint logmessage basic functionality."""
+        session = self.build_and_create_session()
+        initial_stop = self._stop_before_loop(session)
+        source = self.getSourcePath("main.cpp")
+        loop_line = line_number(source, "// break loop")
+        after_loop_line = line_number(source, "// after loop")
+
+        # Set two breakpoints:
+        # 1. First at the loop line with logMessage
+        # 2. Second guard breakpoint at a line after loop
+        logMessage_prefix = "This is log message for { -- "
+        logMessage = logMessage_prefix + "{i + 3}, {message}"
+        [_, post_loop_breakpoint_id] = session.resolve_source_breakpoints(
+            source,
+            [
+                SourceBreakpoint(loop_line, logMessage=logMessage),
+                SourceBreakpoint(after_loop_line),
+            ],
+        )
+
+        # Continue and verify we hit the breakpoint after loop line
+        post_loop_stop = session.continue_to_breakpoint(post_loop_breakpoint_id)
+
+        captured = session.collect_console(after=initial_stop, until=post_loop_stop)
+        logMessage_output = self._filter_lines(captured.seen_texts, logMessage_prefix)
+        # Verify logMessage count.
+        self.assertEqual(len(logMessage_output), 10)
+
+        message_addr_pattern = r"\b0x[0-9A-Fa-f]+\b"
+        message_content = '"Hello from main!"'
+
+        # Verify logMessage match.
+        for idx, logMessage_line in enumerate(logMessage_output):
+            result = idx + 3
+            self.assertRegex(
+                logMessage_line,
+                f"{logMessage_prefix}{result}, {message_addr_pattern} {message_content}",
+            )
+        session.continue_to_exit()
+
+    @skipIfWindows
+    def test_logmessage_advanced(self):
+        """Tests breakpoint logmessage functionality for complex expression."""
+        session = self.build_and_create_session()
+        initial_stop = self._stop_before_loop(session)
+        source = self.getSourcePath("main.cpp")
+        loop_line = line_number(source, "// break loop")
+        after_loop_line = line_number(source, "// after loop")
+
+        # Set two breakpoints:
+        # 1. First at the loop line with logMessage
+        # 2. Second guard breakpoint at a line after loop
+        logMessage_prefix = "This is log message for { -- "
+        logMessage = (
+            logMessage_prefix
+            + "{int y = 0; if (i % 3 == 0) { y = i + 3;} else {y = i * 3;} y}"
+        )
+        [_, post_loop_breakpoint_id] = session.resolve_source_breakpoints(
+            source,
+            [
+                SourceBreakpoint(loop_line, logMessage=logMessage),
+                SourceBreakpoint(after_loop_line),
+            ],
+        )
+
+        post_loop_stop = session.continue_to_breakpoint(post_loop_breakpoint_id)
+        captured = session.collect_console(after=initial_stop, until=post_loop_stop)
+        logMessage_output = self._filter_lines(captured.seen_texts, logMessage_prefix)
+        # Verify log message count.
+        self.assertEqual(len(logMessage_output), 10)
+
+        # Verify logMessage count
+        for idx, logMessage_line in enumerate(logMessage_output):
+            result = idx + 3 if idx % 3 == 0 else idx * 3
+            self.assertEqual(logMessage_line, logMessage_prefix + str(result))
+
+    @skipIfWindows
+    def test_logmessage_format(self):
+        """Tests breakpoint logmessage functionality with format."""
+        session = self.build_and_create_session()
+        initial_stop = self._stop_before_loop(session)
+        source = self.getSourcePath("main.cpp")
+        loop_line = line_number(source, "// break loop")
+        after_loop_line = line_number(source, "// after loop")
+
+        logMessage_prefix = "This is log message for -- "
+        logMessage_with_format = "part1\tpart2\bpart3\x64part4"
+        logMessage_with_format_raw = r"part1\tpart2\bpart3\x64part4"
+        logMessage = logMessage_prefix + logMessage_with_format_raw + "{i - 1}"
+        [_, post_loop_breakpoint_id] = session.resolve_source_breakpoints(
+            source,
+            [
+                SourceBreakpoint(loop_line, logMessage=logMessage),
+                SourceBreakpoint(after_loop_line),
+            ],
+        )
+
+        post_loop_stop = session.continue_to_breakpoint(post_loop_breakpoint_id)
+        captured = session.collect_console(after=initial_stop, until=post_loop_stop)
+        logMessage_output = self._filter_lines(captured.seen_texts, logMessage_prefix)
+        # Verify logMessage count.
+        self.assertEqual(len(logMessage_output), 10)
+
+        # Verify logMessage match.
+        for idx, logMessage_line in enumerate(logMessage_output):
+            result = idx - 1
+            self.assertEqual(
+                logMessage_line,
+                logMessage_prefix + logMessage_with_format + str(result),
+            )
+
+    @skipIfWindows
+    def test_logmessage_format_failure(self):
+        """Tests breakpoint logmessage format with parsing failure."""
+        session = self.build_and_create_session()
+        initial_stop = self._stop_before_loop(session)
+        source = self.getSourcePath("main.cpp")
+        loop_line = line_number(source, "// break loop")
+        after_loop_line = line_number(source, "// after loop")
+
+        logMessage_prefix = "This is log message for -- "
+        # log message missing hex number.
+        logMessage = logMessage_prefix + r"part1\x"
+        [loop_breakpoint_id, _] = session.resolve_source_breakpoints(
+            source,
+            [
+                SourceBreakpoint(loop_line, logMessage=logMessage),
+                SourceBreakpoint(after_loop_line),
+            ],
+        )
+
+        # The adapter emits the format error to the console during
+        # setBreakpoints and falls back to a real stop at the loop breakpoint
+        # when execution resumes.
+        loop_stop_event = session.continue_to_breakpoint(loop_breakpoint_id)
+        captured = session.collect_console(after=initial_stop, until=loop_stop_event)
+
+        failure_prefix = "Log message has error:"
+        logMessage_failure_output = [
+            line.strip()
+            for line in self._filter_lines(captured.seen_texts, failure_prefix)
+        ]
+        self.assertEqual(len(logMessage_failure_output), 1)
+        self.assertEqual(
+            logMessage_failure_output[0],
+            failure_prefix + " missing hex number following '\\x'",
+        )

@@ -2,10 +2,10 @@
 Test lldb-dap stepInTargets request
 """
 
-from lldb_dap.dap_types import LaunchArgs, StepInTargetsArgs
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldbsuite.test.decorators import no_match, skipIf, skipif_darwin, skipif_linux
 from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs, StepInTargetsArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 class TestDAP_stepInTargets(DAPTestCaseBase):
@@ -42,16 +42,16 @@ int main(int argc, char const *argv[]) {
         # Set breakpoint in the thread function so we can step the threads
         with session.configure(LaunchArgs(program)) as ctx:
             session.resolve_source_breakpoints(source, lines)
-        process_event = ctx.process_event()
+        process_event = ctx.process_event
         stop_event = session.verify_stopped_on_breakpoint(after=process_event)
 
-        thread_ctxs = session.get_thread_context(stop_event.body.threadId)
+        thread_ctxs = session.thread_context_from(stop_event)
         top_frame = thread_ctxs.top_frame()
 
         # Request all step in targets list and verify the response.
-        step_in_targets_response = session.request_and_respond(
+        step_in_targets_response = session.send_request(
             StepInTargetsArgs(top_frame.frame.id)
-        )
+        ).result()
         self.assertEqual(step_in_targets_response.success, True, "expect success")
         step_in_targets = step_in_targets_response.body.targets
 
@@ -91,7 +91,7 @@ int main(int argc, char const *argv[]) {
         bp_lines = [line_number(source, "// set breakpoint here")]
         with session.configure(LaunchArgs(program)) as ctx:
             session.resolve_source_breakpoints(source, bp_lines)
-        process_event = ctx.process_event()
+        process_event = ctx.process_event
 
         session.verify_stopped_on_breakpoint(after=process_event)
         self.assertTrue(
@@ -109,7 +109,7 @@ int main(int argc, char const *argv[]) {
         bp_lines = [line_number(source, "// set breakpoint here")]
         with session.configure(LaunchArgs(program)) as ctx:
             session.resolve_source_breakpoints(source, bp_lines)
-        process_event = ctx.process_event()
+        process_event = ctx.process_event
 
         session.verify_stopped_on_breakpoint(after=process_event)
         self.assertFalse(

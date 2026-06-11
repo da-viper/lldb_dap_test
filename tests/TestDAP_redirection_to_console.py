@@ -1,9 +1,11 @@
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldb_dap.dap_types import LaunchArgs
 from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.utils import DebugAdapterOptions
 
 
 class TestDAP_redirection_to_console(DAPTestCaseBase):
+    USE_DEFAULT_DEBUG_ADAPTER = False
     TEST_PROGRAM = r"""
 int multiply(int x, int y) {
   return x * y; // breakpoint 1
@@ -15,7 +17,6 @@ int main(int argc, char const *argv[]) {
 }
 
 """
-    LLDB_DAP_ENV = {"LLDB_DAP_TEST_STDOUT_STDERR_REDIRECTION": ""}
 
     def build(self):
         self.create_test_program_with_name("main.cpp")
@@ -28,20 +29,26 @@ int main(int argc, char const *argv[]) {
 
             Exception: unexpected malformed message from lldb-dap
         """
-        session = self.build_and_create_session()
+        self.build()
         program = self.getBuildArtifact("a.out")
+        adapter = self.create_stdio_debug_adapter(
+            DebugAdapterOptions(
+                env={"LLDB_DAP_TEST_STDOUT_STDERR_REDIRECTION": ""},
+            )
+        )
+        session = self.create_session(adapter=adapter)
+
         source = "main.cpp"
         breakpoint1_line = line_number(source, "// breakpoint 1")
         with session.configure(LaunchArgs(program)) as ctx:
             breakpoint_ids = session.resolve_source_breakpoints(
                 source, [breakpoint1_line]
             )
-        process_event = ctx.process_event()
         stop_event = session.verify_stopped_on_breakpoint(
-            breakpoint_ids, after=process_event
+            breakpoint_ids, after=ctx.process_event
         )
 
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = session.thread_context_from(stop_event)
         local_variables = thread_ctx.frames()[1].locals
         local_names = [var.name for var in local_variables]
         self.assertIn("argc", local_names)

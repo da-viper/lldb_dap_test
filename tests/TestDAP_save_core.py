@@ -4,10 +4,10 @@ Test saving core minidump from lldb-dap
 
 import os
 
-from lldb_dap.dap_types import LaunchArgs
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldbsuite.test.decorators import skipUnlessArch, skipUnlessPlatform
 from lldbsuite.test.lldbtest import PROCESS_IS_VALID, line_number
+from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 class TestDAP_save_core(DAPTestCaseBase):
@@ -38,11 +38,11 @@ int main(int argc, char const *argv[]) { return function(2); }
             breakpoint_ids = session.resolve_source_breakpoints(source, lines)
 
         stop_event = session.verify_stopped_on_breakpoint(
-            breakpoint_ids, after=ctx.process_event()
+            breakpoint_ids, after=ctx.process_event
         )
 
         # Getting dap stack trace may trigger __lldb_caller_function JIT module to be created.
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = session.thread_context_from(stop_event)
         thread_ctx.top_frame().frame
 
         modules = session.get_modules()
@@ -82,7 +82,7 @@ int main(int argc, char const *argv[]) { return function(2); }
         # check if the core is in desired state
         self.assertTrue(process, PROCESS_IS_VALID)
         self.assertTrue(process.GetProcessInfo().IsValid())
-        triple = self.expect_is_not_none(target.GetTriple())
+        triple = self.expect_not_none(target.GetTriple())
         self.assertNotEqual(triple.find("linux"), -1)
         self.assertTrue(target.GetNumModules(), expected_module_count)
         self.assertEqual(process.GetNumThreads(), expected_thread_count)

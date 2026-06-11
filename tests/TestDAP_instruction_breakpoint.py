@@ -1,10 +1,10 @@
 import os
 import shutil
 
-from lldb_dap import lldb_dap_testcase
-from lldb_dap.dap_types import LaunchArgs
 from lldbsuite.test.decorators import skipIfWindows
 from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap import lldb_dap_testcase
+from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
 
 
 class TestDAP_InstructionBreakpointTestCase(lldb_dap_testcase.DAPTestCaseBase):
@@ -67,26 +67,26 @@ int main(int argc, char const *argv[]) {
                 breakpoint.line, main_line, "incorrect breakpoint source line"
             )
             self.assertTrue(breakpoint.verified, "breakpoint is not verified")
-            breakpoint_source = self.expect_is_not_none(breakpoint.source)
+            breakpoint_source = self.expect_not_none(breakpoint.source)
             self.assertEqual(
                 self.main_basename, breakpoint_source.name, "incorrect source name"
             )
             self.assertEqual(
                 self.main_path, breakpoint_source.path, "incorrect source file path"
             )
-            other_breakpoint_id = self.expect_is_not_none(breakpoint.id)
+            other_breakpoint_id = self.expect_not_none(breakpoint.id)
 
         # Continue and then verify the breakpoint
         stop_event = session.verify_stopped_on_breakpoint(
-            [other_breakpoint_id], after=ctx.process_event()
+            other_breakpoint_id, after=ctx.process_event
         )
 
         # now we check the stack trace making sure that we got mapped source paths
-        thread_ctx = session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = session.thread_context_from(stop_event)
         top_frame_ctx = thread_ctx.top_frame()
         top_frame = top_frame_ctx.frame
 
-        frame_source = self.expect_is_not_none(top_frame.source)
+        frame_source = self.expect_not_none(top_frame.source)
         self.assertEqual(frame_source.name, self.main_basename, "incorrect source name")
         self.assertEqual(
             frame_source.path, self.main_path, "incorrect source file path"
@@ -117,7 +117,7 @@ int main(int argc, char const *argv[]) {
             "Instruction breakpoint has not been resolved or failed to relocate the instruction breakpoint",
         )
 
-        inst_breakpoint_id = self.expect_is_not_none(inst_breakpoint.id)
+        inst_breakpoint_id = self.expect_not_none(inst_breakpoint.id)
         session.continue_to_breakpoint(inst_breakpoint_id)
 
         # Clear breakpoints that are set.

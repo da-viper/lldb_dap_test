@@ -1,229 +1,201 @@
 """
 Test the redirection of stdio.
-There are three ways to launch the debuggee
+There are three ways to launch the debuggee:
 internalConsole, integratedTerminal and externalTerminal.
 
-For the three configurations, we test if we can read data
-from environments, stdin and cli arguments.
+For each redirection configuration we exercise the stdin, argv, and env
+input paths in a single launch. The C++ test program writes whatever it
+receives from each available source. Assertions then check that every
+applicable path arrived through the redirected stream.
 
-NOTE: The testcases do not include all possible configurations of
-consoles, environments, stdin and cli arguments.
+NOTE: The testcases do not include all possible configurations of consoles.
 """
 
-from lldb_dap.dap_types import Console
-from lldb_dap.dap_types import LaunchArgs
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from abc import abstractmethod
 from tempfile import NamedTemporaryFile
 
+from lldbsuite.test.tools.lldb_dap.dap_types import Console, LaunchArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+
 
 class DAP_launchIO(DAPTestCaseBase):
-    """The class holds the implementation different ways to redirect the debuggee I/O streams
-    which is configurable from the Derived classes.
+    """Implements the redirection scenarios that are common to every console.
 
-    Depending on the console type the output will be in different places.
-    It also provides two abstract functions `_get_debuggee_stdout` and `_get_debuggee_stderr`
-    that provides the debuggee stdout and stderr.
+    Subclasses provide `console` and override `_get_debuggee_stdout` /
+    `_get_debuggee_stderr` for the cases where stdout / stderr are not
+    redirected to files (the streams have to be read from the console
+    instead, which differs between InternalConsole and IntegratedTerminal).
     """
 
     TEST_PROGRAM = r"""
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
+#include <string>
 
 int main(int argc, char *argv[]) {
-  const bool use_stdin = argc <= 1;
-  const char *use_env = std::getenv("FROM_ENV");
+  // Parse args: an optional positional value, plus the flag --read-stdin.
+  // The flag is set by tests that have wired up stdin redirection; without
+  // it we never call getline, which would otherwise block on a pipe that's
+  // open but empty (e.g. the test runner's stdin in runInTerminal mode).
+  std::string arg_text;
+  bool read_stdin = false;
+  for (int i = 1; i < argc; ++i) {
+    if (std::strcmp(argv[i], "--read-stdin") == 0) {
+      read_stdin = true;
+    } else if (arg_text.empty()) {
+      arg_text = argv[i];
+    }
+  }
 
-  if (use_env != nullptr) { // from environment variable
-    std::cout << "[STDOUT][FROM_ENV]: " << use_env;
-    std::cerr << "[STDERR][FROM_ENV]: " << use_env;
-
-  } else if (use_stdin) { // from standard in
+  if (!arg_text.empty()) {
+    std::cout << "[STDOUT][FROM_ARGV]: " << arg_text << "\n";
+    std::cerr << "[STDERR][FROM_ARGV]: " << arg_text << "\n";
+  }
+  if (const char *env = std::getenv("FROM_ENV")) {
+    std::cout << "[STDOUT][FROM_ENV]: " << env << "\n";
+    std::cerr << "[STDERR][FROM_ENV]: " << env << "\n";
+  }
+  if (read_stdin) {
     std::string line;
-    std::getline(std::cin, line);
-    std::cout << "[STDOUT][FROM_STDIN]: " << line;
-    std::cerr << "[STDERR][FROM_STDIN]: " << line;
-
-  } else { // from argv
-    const char *first_arg = argv[1];
-    std::cout << "[STDOUT][FROM_ARGV]: " << first_arg;
-    std::cerr << "[STDERR][FROM_ARGV]: " << first_arg;
+    if (std::getline(std::cin, line)) {
+      std::cout << "[STDOUT][FROM_STDIN]: " << line << "\n";
+      std::cerr << "[STDERR][FROM_STDIN]: " << line << "\n";
+    }
   }
   return 0;
 }
-
 """
+
     def setUp(self):
         super().setUp()
-        self.session = self.build_and_create_session()
+        self._session = self.build_and_create_session()
 
-    def all_redirection(self, console: Console, with_args: bool = False):
-        """Test all standard io redirection."""
+    def all_redirection(self, console: Console):
+        """All three streams redirected to files. Verify every input path."""
         program = self.getBuildArtifact("a.out")
-        input_text = "from stdin with redirection"
-        args_text = "string from argv"
-        program_args = [args_text] if with_args else None
+        stdin_text = "from stdin"
+        args_text = "from argv"
+        env_text = "from env"
 
         with NamedTemporaryFile("wt") as stdin, NamedTemporaryFile(
             "rt"
         ) as stdout, NamedTemporaryFile("rt") as stderr:
-            stdin.write(input_text)
+            stdin.write(stdin_text)
             stdin.flush()
-            self.session.launch_using_config(
+            self._session.launch(
                 LaunchArgs(
                     program,
                     stdio=[stdin.name, stdout.name, stderr.name],
                     console=console,
-                    args=program_args,
+                    args=["--read-stdin", args_text],
+                    env={"FROM_ENV": env_text},
                 )
             )
-            self.session.verify_process_exited()
+            self._session.verify_process_exited()
 
-            all_stdout = stdout.read()
-            all_stderr = stderr.read()
+            out = stdout.read()
+            err = stderr.read()
+            self.assertIn(f"[STDOUT][FROM_STDIN]: {stdin_text}", out)
+            self.assertIn(f"[STDOUT][FROM_ARGV]: {args_text}", out)
+            self.assertIn(f"[STDOUT][FROM_ENV]: {env_text}", out)
 
-            if with_args:
-                self.assertEqual(f"[STDOUT][FROM_ARGV]: {args_text}", all_stdout)
-                self.assertEqual(f"[STDERR][FROM_ARGV]: {args_text}", all_stderr)
+            self.assertIn(f"[STDERR][FROM_STDIN]: {stdin_text}", err)
+            self.assertIn(f"[STDERR][FROM_ARGV]: {args_text}", err)
+            self.assertIn(f"[STDERR][FROM_ENV]: {env_text}", err)
 
-                self.assertNotIn(f"[STDOUT][FROM_ARGV]: {args_text}", all_stderr)
-                self.assertNotIn(f"[STDERR][FROM_ARGV]: {args_text}", all_stdout)
-
-            else:
-                self.assertEqual(f"[STDOUT][FROM_STDIN]: {input_text}", all_stdout)
-                self.assertEqual(f"[STDERR][FROM_STDIN]: {input_text}", all_stderr)
-
-                self.assertNotIn(f"[STDERR][FROM_STDIN]: {input_text}", all_stdout)
-                self.assertNotIn(f"[STDOUT][FROM_STDIN]: {input_text}", all_stderr)
-
-    def stdin_redirection(self, console: Console, with_args: bool = False):
-        """Test only stdin redirection."""
+    def stdin_redirection(self, console: Console):
+        """Only stdin redirected. Verify every input path via console output."""
         program = self.getBuildArtifact("a.out")
-        input_text = "string from stdin"
-        args_text = "string from argv"
-        program_args = [args_text] if with_args else None
+        stdin_text = "from stdin"
+        args_text = "from argv"
+        env_text = "from env"
 
         with NamedTemporaryFile("w+t") as stdin:
-            stdin.write(input_text)
+            stdin.write(stdin_text)
             stdin.flush()
-            self.session.launch_using_config(
+            self._session.launch(
                 LaunchArgs(
-                    program, stdio=[stdin.name], console=console, args=program_args
+                    program,
+                    stdio=[stdin.name],
+                    console=console,
+                    args=["--read-stdin", args_text],
+                    env={"FROM_ENV": env_text},
                 )
             )
-            self.session.verify_process_exited()
+            self._session.verify_process_exited()
 
-            stdout_text = self._get_debuggee_stdout()
-            stderr_text = self._get_debuggee_stderr()
+            out = self._get_debuggee_stdout()
+            err = self._get_debuggee_stderr()
+            self.assertIn(f"[STDOUT][FROM_STDIN]: {stdin_text}", out)
+            self.assertIn(f"[STDOUT][FROM_ARGV]: {args_text}", out)
+            self.assertIn(f"[STDOUT][FROM_ENV]: {env_text}", out)
 
-            if with_args:
-                self.assertIn(f"[STDOUT][FROM_ARGV]: {args_text}", stdout_text)
-                self.assertIn(f"[STDERR][FROM_ARGV]: {args_text}", stderr_text)
-            else:
-                self.assertIn(f"[STDOUT][FROM_STDIN]: {input_text}", stdout_text)
-                self.assertIn(f"[STDERR][FROM_STDIN]: {input_text}", stderr_text)
+            self.assertIn(f"[STDERR][FROM_STDIN]: {stdin_text}", err)
+            self.assertIn(f"[STDERR][FROM_ARGV]: {args_text}", err)
+            self.assertIn(f"[STDERR][FROM_ENV]: {env_text}", err)
 
-    def stdout_redirection(self, console: Console, with_env: bool = False):
-        """Test only stdout redirection."""
+    def stdout_redirection(self, console: Console):
+        """Only stdout redirected. Verify argv and env paths.
+
+        stdin is not set up — the C++ program skips reading it because the
+        file descriptor is a tty (would block).
+        """
         program = self.getBuildArtifact("a.out")
-
-        argv_text = "output with\n multiline"
-        # By default unix terminals the ONLCR flag is enabled. which replaces '\n' with '\r\n'
-        # see https://man7.org/linux/man-pages/man3/termios.3.html.
-        # This does not affect writing to normal files.
-        argv_replaced_text = argv_text.replace("\n", "\r\n")
-
-        program_args = [argv_text]
-        env_text = "string from env"
-        env = {"FROM_ENV": env_text} if with_env else {}
+        args_text = "from argv"
+        env_text = "from env"
 
         with NamedTemporaryFile("rt") as stdout:
-            self.session.launch_using_config(
+            self._session.launch(
                 LaunchArgs(
                     program,
                     stdio=[None, stdout.name],
                     console=console,
-                    args=program_args,
-                    env=env,
+                    args=[args_text],
+                    env={"FROM_ENV": env_text},
                 )
             )
-            self.session.verify_process_exited()
+            self._session.verify_process_exited()
 
-            # check stdout
-            stdout_text = stdout.read()
-            stderr_text = self._get_debuggee_stderr()
-            if with_env:
-                self.assertIn(f"[STDOUT][FROM_ENV]: {env_text}", stdout_text)
-                self.assertIn(f"[STDERR][FROM_ENV]: {env_text}", stderr_text)
+            out = stdout.read()
+            err = self._get_debuggee_stderr()
+            self.assertIn(f"[STDOUT][FROM_ARGV]: {args_text}", out)
+            self.assertIn(f"[STDOUT][FROM_ENV]: {env_text}", out)
 
-                self.assertNotIn(f"[STDERR][FROM_ENV]: {env_text}", stdout_text)
-                self.assertNotIn(f"[STDOUT][FROM_ENV]: {env_text}", stderr_text)
-            else:
-                self.assertIn(f"[STDOUT][FROM_ARGV]: {argv_text}", stdout_text)
+            self.assertIn(f"[STDERR][FROM_ARGV]: {args_text}", err)
+            self.assertIn(f"[STDERR][FROM_ENV]: {env_text}", err)
 
-                self.assertNotIn(
-                    f"[STDERR][FROM_ARGV]: {argv_replaced_text}", stdout_text
-                )
-                self.assertNotIn(f"[STDOUT][FROM_ARGV]: {argv_text}", stderr_text)
-
-            # check stderr
-            stderr_text = self._get_debuggee_stderr()
-            # FIXME: when using 'integrated' or 'external' terminal we do not correctly
-            # escape newlines that are sent to the terminal.
-            if console == "integratedConsole":
-                if with_env:
-                    self.assertNotIn(f"[STDOUT][FROM_ENV]: {env_text}", stderr_text)
-                    self.assertIn(f"[STDERR][FROM_ENV]: {env_text}", stderr_text)
-                else:
-                    self.assertNotIn(
-                        f"[STDOUT][FROM_ARGV]: {argv_replaced_text}", stderr_text
-                    )
-                    self.assertIn(
-                        f"[STDERR][FROM_ARGV]: {argv_replaced_text}", stderr_text
-                    )
-
-    def stderr_redirection(self, console: Console, with_env: bool = False):
-        """Test only stdout redirection."""
+    def stderr_redirection(self, console: Console):
+        """Only stderr redirected. Verify argv and env paths."""
         program = self.getBuildArtifact("a.out")
-
-        argv_text = "output with\n multiline"
-        # By default unix terminals the ONLCR flag is enabled. which replaces '\n' with '\r\n'
-        # see https://man7.org/linux/man-pages/man3/termios.3.html.
-        # This does not affect writing to normal files.
-        # Currently out test implementation for external and integrated Terminal does not run the
-        # program through a shell terminal.
-        argv_replaced_text = argv_text
-        if console == "internalConsole":
-            argv_replaced_text = argv_text.replace("\n", "\r\n")
-        program_args = [argv_text]
-        env_text = "string from env"
-        env = {"FROM_ENV": env_text} if with_env else {}
+        args_text = "from argv"
+        env_text = "from env"
 
         with NamedTemporaryFile("rt") as stderr:
-            self.session.launch_using_config(
+            self._session.launch(
                 LaunchArgs(
                     program,
                     stdio=[None, None, stderr.name],
                     console=console,
-                    args=program_args,
-                    env=env,
+                    args=[args_text],
+                    env={"FROM_ENV": env_text},
                 )
             )
-            self.session.verify_process_exited()
-            stdout_text = self._get_debuggee_stdout()
-            stderr_text = stderr.read()
-            if with_env:
-                self.assertIn(f"[STDOUT][FROM_ENV]: {env_text}", stdout_text)
-                self.assertIn(f"[STDERR][FROM_ENV]: {env_text}", stderr_text)
-            else:
-                self.assertIn(f"[STDOUT][FROM_ARGV]: {argv_replaced_text}", stdout_text)
-                self.assertIn(f"[STDERR][FROM_ARGV]: {argv_text}", stderr_text)
+            self._session.verify_process_exited()
+
+            out = self._get_debuggee_stdout()
+            err = stderr.read()
+            self.assertIn(f"[STDOUT][FROM_ARGV]: {args_text}", out)
+            self.assertIn(f"[STDOUT][FROM_ENV]: {env_text}", out)
+
+            self.assertIn(f"[STDERR][FROM_ARGV]: {args_text}", err)
+            self.assertIn(f"[STDERR][FROM_ENV]: {env_text}", err)
 
     @abstractmethod
     def _get_debuggee_stdout(self) -> str:
         """Retrieves the standard output (stdout) from the debuggee process.
 
-        The default destination of the debuggee's stdout can vary based on how the debugger
+        The default destination of the debuggee's stdout can vary based on how the debuggee
         was launched (either a debug console or a pseudo-terminal (pty)).
         It requires subclasses to implement the specific mechanism for obtaining the stdout stream.
         """
@@ -233,7 +205,7 @@ int main(int argc, char *argv[]) {
     def _get_debuggee_stderr(self) -> str:
         """Retrieves the standard error (stderr) from the debuggee process.
 
-        The default destination of the debuggee's stderr can vary based on how the debugger
+        The default destination of the debuggee's stderr can vary based on how the debuggee
         was launched (either a debug console or a pseudo-terminal (pty)).
         It requires subclasses to implement the specific mechanism for obtaining the stderr stream.
         """

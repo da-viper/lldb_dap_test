@@ -3,10 +3,10 @@ Test lldb-dap source request
 """
 
 
-from lldb_dap.dap_types import LaunchArgs, SourceArgs, StackTraceArgs
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldbsuite.test.decorators import skipIfWindows
 from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs, SourceArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 class TestDAP_source(DAPTestCaseBase):
@@ -45,14 +45,14 @@ int main(int argc, char const *argv[]) {
             )
 
         stop_event = session.verify_stopped_on_breakpoint(
-            breakpoint_ids, after=ctx.process_event()
+            breakpoint_ids, after=ctx.process_event
         )
 
-        response = session.request_and_error_response(SourceArgs(sourceReference=0))
+        response = session.send_request(SourceArgs(sourceReference=0)).error()
         self.assertFalse(response.success, "verify invalid sourceReference fails")
 
-        thread_id = self.expect_is_not_none(stop_event.body.threadId)
-        response = session.request_and_respond(StackTraceArgs(thread_id))
+        thread_id = self.expect_not_none(stop_event.body.threadId)
+        response = session.stack_trace(thread_id)
 
         stack_frames = response.body.stackFrames
         total_frames = response.body.totalFrames
@@ -99,16 +99,16 @@ int main(int argc, char const *argv[]) {
                 self.assertEqual(frame.line, want["line"])
 
             want_source = want["source"]
-            frame_source = self.expect_is_not_none(frame.source)
+            frame_source = self.expect_not_none(frame.source)
             self.assertEqual(frame_source.name, want_source["name"])
 
             self.assertEqual(frame_source.path, want_source["path"])
 
             if want_source["containsSourceReference"]:
-                source_reference = self.expect_is_not_none(frame_source.sourceReference)
-                source_response = session.request_and_respond(
+                source_reference = self.expect_not_none(frame_source.sourceReference)
+                source_response = session.send_request(
                     SourceArgs(source_reference)
-                )
+                ).result()
                 self.assertGreater(
                     len(source_response.body.content),
                     0,

@@ -1,5 +1,5 @@
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 class TestDAP_launch_version(DAPTestCaseBase):
@@ -25,13 +25,11 @@ int main(int argc, char const *argv[], char const *envp[]) {
         program = self.getBuildArtifact("a.out")
         session = self.build_and_create_session()
 
-        process_event = session.launch_using_config(
-            LaunchArgs(program=program, stopOnEntry=True)
-        )
+        process_event = session.launch(LaunchArgs(program=program, stopOnEntry=True))
         session.verify_stopped_on_entry(after=process_event)
 
         version_eval_output = session.evaluate("`version", context="repl").result
-        version_string = self.expect_is_not_none(session.capabilities().lldb_version)
+        version_string = self.expect_not_none(session.capabilities().lldb_version)
 
         self.assertEqual(
             version_eval_output.splitlines(),

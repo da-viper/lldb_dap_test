@@ -5,8 +5,8 @@ Test lldb-dap unknown request.
 from dataclasses import dataclass
 from typing import Optional
 
-from lldb_dap.dap_types import EmptyBodyResponse, LaunchArgs
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.dap_types import EmptyBodyResponse, LaunchArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 @dataclass(frozen=True)
@@ -36,13 +36,11 @@ int main() {
     def test_no_arguments(self):
         session = self.build_and_create_session()
         program = self.getBuildArtifact("a.out")
-        process_event = session.launch_using_config(
-            LaunchArgs(program, stopOnEntry=True)
-        )
+        process_event = session.launch(LaunchArgs(program, stopOnEntry=True))
         session.verify_stopped_on_entry(after=process_event)
 
         handle = session.send_request(UnknownArgs())
-        response = session.get_error_response(handle)
+        response = handle.error()
         self.assertFalse(response.success)
         self.assertEqual(response.body.error.format, "unknown request")
 
@@ -51,13 +49,11 @@ int main() {
     def test_with_arguments(self):
         session = self.build_and_create_session()
         program = self.getBuildArtifact("a.out")
-        process_event = session.launch_using_config(
-            LaunchArgs(program, stopOnEntry=True)
-        )
+        process_event = session.launch(LaunchArgs(program, stopOnEntry=True))
         session.verify_stopped_on_entry(after=process_event)
 
         handle = session.send_request(UnknownArgs(foo="bar", id=42))
-        response = session.get_error_response(handle)
+        response = handle.error()
         self.assertFalse(response.success)
         self.assertEqual(response.body.error.format, "unknown request")
 

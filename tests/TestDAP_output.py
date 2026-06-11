@@ -2,10 +2,10 @@
 Test lldb-dap output events
 """
 
-from lldb_dap.dap_types import LaunchArgs
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldbsuite.test.decorators import skipIfWindows
 from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 class TestDAP_output(DAPTestCaseBase):
@@ -48,17 +48,17 @@ int main() {
             lines = [line_number(source, "// breakpoint 1")]
             breakpoint_ids = session.resolve_source_breakpoints(source, lines)
 
-        process_event = ctx.process_event()
+        process_event = ctx.process_event
         session.verify_stopped_on_breakpoint(breakpoint_ids, after=process_event)
 
         # Ensure partial messages are still sent.
-        output = session.collect_stdout_until("abcdef", after=process_event)
+        output = session.collect_stdout(after=process_event, until="abcdef")
         self.assertGreater(len(output.seen_texts), 0, "expect program stdout")
 
         session.continue_to_exit()
 
         # Disconnecting from the server to ensure any pending IO is flushed.
-        session.do_disconnect()
+        session.disconnect()
 
         output = session.get_stdout()
         self.assertTrue(output and len(output) > 0, "expect program stdout")

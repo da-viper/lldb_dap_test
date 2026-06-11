@@ -2,10 +2,10 @@
 Test lldb-dap launch request.
 """
 
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldb_dap.dap_types import InitializedEvent, LaunchArgs
 from lldbsuite.test.decorators import skipIf
 from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 class TestDAP_launch_commands(DAPTestCaseBase):
@@ -36,71 +36,61 @@ class TestDAP_launch_commands(DAPTestCaseBase):
         exitCommands = ["expr 2+3", "expr 3+4"]
         terminateCommands = ["expr 4+2"]
         session = self.build_and_create_session()
-        launch_handle = session.initialize_and_launch(
-            LaunchArgs(
-                program,
-                initCommands=initCommands,
-                preRunCommands=preRunCommands,
-                postRunCommands=postRunCommands,
-                stopCommands=stopCommands,
-                exitCommands=exitCommands,
-                terminateCommands=terminateCommands,
-            )
-        )
-        last_resp = session.last_response()
-        session.wait_for_event(InitializedEvent, after=last_resp)
-
-        # Get output from the console. This should contain both the
-        # "initCommands" and the "preRunCommands".
-        coutput = session.collect_console_until(postRunCommands[-1], after=last_resp)
-        output = coutput.seen_texts
-        # Verify all "initCommands" were found in console output
-        session.verify_commands("initCommands", output, initCommands)
-        # Verify all "preRunCommands" were found in console output
-        session.verify_commands("preRunCommands", output, preRunCommands)
-        # Verify all "postRunCommands" were found in console output
-        session.verify_commands("postRunCommands", output, postRunCommands)
 
         source = "main.cpp"
         first_line = line_number(source, "// breakpoint 1")
         second_line = line_number(source, "// breakpoint 2")
         lines = [first_line, second_line]
 
-        # Set 2 breakpoints so we can verify that "stopCommands" get run as the
-        # breakpoints get hit
-        breakpoint_ids = session.resolve_source_breakpoints(source, lines)
-        self.assertEqual(
-            len(breakpoint_ids), len(lines), "expect correct number of breakpoints"
+        launch_args = LaunchArgs(
+            program,
+            initCommands=initCommands,
+            preRunCommands=preRunCommands,
+            postRunCommands=postRunCommands,
+            stopCommands=stopCommands,
+            exitCommands=exitCommands,
+            terminateCommands=terminateCommands,
         )
+        with session.configure(launch_args) as ctx:
+            # Get output from the console. This should contain the
+            # "initCommands", "preRunCommands", and "postRunCommands".
+            coutput = session.collect_console(
+                after=ctx.init_response, until=postRunCommands[-1]
+            )
+            output = coutput.seen_texts
+            session.verify_commands("initCommands", output, initCommands)
+            session.verify_commands("preRunCommands", output, preRunCommands)
+            session.verify_commands("postRunCommands", output, postRunCommands)
 
-        session.verify_configuration_done()
-        launch_response = session.get_response(launch_handle)
+            # Set 2 breakpoints so we can verify that "stopCommands" get run as
+            # the breakpoints get hit.
+            [first_bp, second_bp] = session.resolve_source_breakpoints(source, lines)
+
+        launch_response = ctx.launch_or_attach_response
 
         # Continue after launch and hit the first breakpoint.
-        # Get output from the console. This should contain both the
-        # "stopCommands" that were run after the first breakpoint was hit
-        session.wait_until_any_breakpoint_hit(breakpoint_ids, after=last_resp)
-        coutput = session.collect_console_until(stopCommands[-1], after=launch_response)
+        # Get output from the console. This should contain the
+        # "stopCommands" that were run after the first breakpoint was hit.
+        session.verify_stopped_on_breakpoint(first_bp, after=ctx.process_event)
+        coutput = session.collect_console(after=launch_response, until=stopCommands[-1])
         output = coutput.seen_texts
         session.verify_commands("stopCommands", output, stopCommands)
 
         # Continue again and hit the second breakpoint.
-        # Get output from the console. This should contain both the
-        # "stopCommands" that were run after the second breakpoint was hit
-        session.continue_to_any_breakpoint(breakpoint_ids)
-        coutput = session.collect_console_until(
-            pattern=stopCommands[-1], after=coutput.event
-        )
+        # Get output from the console. This should contain the
+        # "stopCommands" that were run after the second breakpoint was hit.
+        session.continue_to_breakpoint(second_bp)
+        coutput = session.collect_console(after=coutput.event, until=stopCommands[-1])
         output = coutput.seen_texts
         session.verify_commands("stopCommands", output, stopCommands)
 
-        # Continue until the program exits
+        # Continue until the program exits.
+        # Get output from the console. This should contain the
+        # "exitCommands" run on process exit and the "terminateCommands"
+        # run when the debugging session ends.
         session.continue_to_exit()
-        # Get output from the console. This should contain both the
-        # "exitCommands" that were run after the second breakpoint was hit
-        # and the "terminateCommands" due to the debugging session ending
-        coutput = session.collect_console_until(
-            pattern=terminateCommands[0], after=coutput.event
+        coutput = session.collect_console(
+            after=coutput.event, until=terminateCommands[0]
         )
         output = coutput.seen_texts
         session.verify_commands("exitCommands", output, exitCommands)

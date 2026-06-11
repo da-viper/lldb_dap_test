@@ -5,18 +5,17 @@ Test lldb-dap completions request
 # FIXME: remove when LLDB_MINIMUM_PYTHON_VERSION > 3.8
 from __future__ import annotations
 
-from typing import Optional
 from dataclasses import dataclass
+from typing import Optional
 
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldb_dap.dap_types import (
+from lldbsuite.test.decorators import skipIf
+from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap.dap_types import (
     CompletionItem,
     LaunchArgs,
     StoppedReason,
-    ThreadsArgs,
 )
-from lldb_dap.session_helpers import ThreadContext
-from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 @dataclass(frozen=True)
@@ -55,8 +54,7 @@ str1_completion = CompletionItem(
 
 # Older version of libcxx produce slightly different typename strings for
 # templates like vector.
-# TODO: enable this back below.
-# @skipIf(compiler="clang", compiler_version=["<", "16.0"])
+@skipIf(compiler="clang", compiler_version=["<", "16.0"])
 class TestDAP_completions(DAPTestCaseBase):
     TEST_PROGRAM = r"""
 #include <string>
@@ -98,21 +96,21 @@ int main(int argc, char const *argv[]) {
 
     def setUp(self):
         super().setUp()
-        self.session = self.build_and_create_session()
+        self._session = self.build_and_create_session()
 
-    def verify_completions(self, case: Scenario, top_frame_id: Optional[int] = None):
-        session = self.session
+    def verify_completions(self, case: Scenario, frame_id: Optional[int] = None):
+        session = self._session
         completions = {
-            comp for comp in session.get_completions(case.input, frameId=top_frame_id)
+            comp for comp in session.get_completions(case.input, frameId=frame_id)
         }
 
-        # handle expected completions
+        # Handle expected completions.
         for exp_comp in case.expected:
             self.assertIn(
                 exp_comp, completions, f"\nCompletion for input: {case.input}"
             )
 
-        # unexpected completions
+        # Unexpected completions.
         for not_exp_comp in case.not_expected or set():
             with self.subTest(f"Not expected completion : {not_exp_comp}"):
                 self.assertNotIn(not_exp_comp, completions)
@@ -120,16 +118,16 @@ int main(int argc, char const *argv[]) {
     def setup_debuggee(self):
         program = self.getBuildArtifact("a.out")
         source = "main.cpp"
-        with self.session.configure(LaunchArgs(program)) as ctx:
-            self.session.resolve_source_breakpoints(
+        with self._session.configure(LaunchArgs(program)) as ctx:
+            self._session.resolve_source_breakpoints(
                 source,
                 [
                     line_number(source, "// breakpoint 1"),
                     line_number(source, "// breakpoint 2"),
                 ],
             )
-        process_event = ctx.process_event()
-        return self.session.verify_stopped_on_breakpoint(after=process_event)
+        process_event = ctx.process_event
+        return self._session.verify_stopped_on_breakpoint(after=process_event)
 
     def verify_non_ascii_completion(self, alias_cmd: str):
         """Creates an command alias for the `next` command and
@@ -137,7 +135,7 @@ int main(int argc, char const *argv[]) {
 
         It assumes we are in command mode in the repl.
         """
-        self.session.evaluate(f"command alias {alias_cmd} next", context="repl")
+        self._session.evaluate(f"command alias {alias_cmd} next", context="repl")
 
         part = alias_cmd[:2]  # first two characters
         part_codeunits = len(part.encode("utf-16-le")) // 2
@@ -155,22 +153,21 @@ int main(int argc, char const *argv[]) {
         )
 
         # remove the alias
-        self.session.evaluate(f"command unalias {alias_cmd}", context="repl")
+        self._session.evaluate(f"command unalias {alias_cmd}", context="repl")
 
     def test_command_completions(self):
         """
         Tests completion requests for lldb commands, within "repl-mode=command"
         """
         self.setup_debuggee()
-        stop_event = self.session.continue_to_next_stop(
+        stop_event = self._session.continue_to_next_stop(
             exp_reason=StoppedReason.BREAKPOINT
         )
 
-        self.session.evaluate("`lldb-dap repl-mode command", context="repl")
-        # TODO: check the value of res.
+        self._session.evaluate("`lldb-dap repl-mode command", context="repl")
 
-        thread_ctx = self.session.get_thread_context(stop_event.body.threadId)
-        top_frame_id = thread_ctx.top_frame().frame.id
+        top_frame = self._session.top_frame_from(stop_event).frame
+        top_frame_id = top_frame.id
         # Provides completion for top-level commands
         self.verify_completions(
             Scenario(
@@ -283,16 +280,13 @@ int main(int argc, char const *argv[]) {
         self.verify_non_ascii_completion("√∂xt")  # start with non ascii
         self.verify_non_ascii_completion("one_seç")  # ends with non ascii
 
-    # TODO FIx this function.
     def test_variable_completions(self):
-        """
-        Tests completion requests in "repl-mode=variable"
-        """
+        """Tests completion requests in "repl-mode=variable" """
 
         stop_event = self.setup_debuggee()
-        thread_ctx = self.session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = self._session.thread_context_from(stop_event)
         top_frame_id = thread_ctx.top_frame().frame.id
-        session = self.session
+        session = self._session
         session.evaluate(
             "`lldb-dap repl-mode variable", context="repl", frameId=top_frame_id
         )
@@ -330,8 +324,8 @@ int main(int argc, char const *argv[]) {
             top_frame_id,
         )
 
-        stop_event = self.session.continue_to_next_stop()
-        thread_ctx = self.session.get_thread_context(stop_event.body.threadId)
+        stop_event = self._session.continue_to_next_stop()
+        thread_ctx = self._session.thread_context_from(stop_event)
         top_frame_id = thread_ctx.top_frame().frame.id
 
         # We stopped in `main`, so we should see variables from main but
@@ -361,9 +355,9 @@ int main(int argc, char const *argv[]) {
             top_frame_id,
         )
 
-        self.assertIsNotNone(self.session.get_completions("ƒ", top_frame_id))
+        self.assertIsNotNone(self._session.get_completions("ƒ", top_frame_id))
         # Test utf8 after ascii.
-        self.session.get_completions("mƒ", top_frame_id)
+        self._session.get_completions("mƒ", top_frame_id)
 
         # Completion also works for more complex expressions
         self.verify_completions(
@@ -432,11 +426,11 @@ int main(int argc, char const *argv[]) {
         Tests completion requests in "repl-mode=auto"
         """
         stop_event = self.setup_debuggee()
-        session = self.session
+        session = self._session
 
         session.evaluate("`lldb-dap repl-mode auto", context="repl")
 
-        thread_ctx = self.session.get_thread_context(stop_event.body.threadId)
+        thread_ctx = self._session.thread_context_from(stop_event)
         top_frame_id = thread_ctx.top_frame().frame.id
 
         # Stopped at breakpoint 1
@@ -476,7 +470,7 @@ int main(int argc, char const *argv[]) {
 
         # TODO: Note we are not checking the result because the `expression --` command adds an extra character
         # for non ascii variables.
-        self.assertIsNotNone(session.get_completions("ƒ", top_frame_id))
+        session.get_completions("ƒ", top_frame_id)
 
         session.continue_to_exit()
         console_str = session.get_console()

@@ -2,7 +2,7 @@ import threading
 import unittest
 from typing import List, Union
 
-from lldb_dap.dap_types import (
+from lldbsuite.test.tools.lldb_dap.dap_types import (
     CapabilitiesEvent,
     DAPError,
     Event,
@@ -14,7 +14,7 @@ from lldb_dap.dap_types import (
     ProgressEndEvent,
     TerminatedEvent,
 )
-from lldb_dap.utils import EventHistory
+from lldbsuite.test.tools.lldb_dap.utils import EventHistory
 
 
 class TestDAPUtils_EventHistory(unittest.TestCase):
@@ -113,7 +113,7 @@ class TestDAPUtils_EventHistory(unittest.TestCase):
         # so we don't get a Timeout error.
         history.close()
 
-        init_event = history.wait_for_first_event(InitializedEvent)
+        init_event = history.wait_for_earliest_event(InitializedEvent)
         self.assertEqual(init_event.seq, 9)
         self.assertIsInstance(init_event, InitializedEvent)
         self.assertEqual(init_event.type, "event")
@@ -128,14 +128,13 @@ class TestDAPUtils_EventHistory(unittest.TestCase):
 
         # There is no progressEndEvent in history.
         with self.assertRaises(DAPError):
-            history.wait_for_first_event(ProgressEndEvent)
+            history.wait_for_earliest_event(ProgressEndEvent)
 
         # Must wait for at least one event.
         with self.assertRaises(AssertionError):
             history.wait_for_any_event((), after=cap_event)
 
         # Test wait_for_any_event.
-
         # Wait for_any_event should return the first seen event that in in the tuple
         any_event = history.wait_for_any_event(
             (ProcessEvent, OutputEvent, ModuleEvent, TerminatedEvent), after=cap_event
@@ -162,7 +161,7 @@ class TestDAPUtils_EventHistory(unittest.TestCase):
         self.populate_history(history)
         history.close()
 
-        start_event = history.wait_for_first_event(OutputEvent)
+        start_event = history.wait_for_earliest_event(OutputEvent)
         self.assertEqual(start_event.seq, 1)
         self.assertIsInstance(start_event, OutputEvent)
         self.assertEqual(start_event.body.output, "Running preInitCommands:\n")
@@ -254,7 +253,7 @@ class TestDAPUtils_EventHistory(unittest.TestCase):
         event_thread.start()
 
         try:
-            exited_event = history.wait_for_first_event(ExitedEvent)
+            exited_event = history.wait_for_earliest_event(ExitedEvent)
             self.assertEqual(exited_event.seq, 47)
             self.assertEqual(exited_event.body.exitCode, 0)
 

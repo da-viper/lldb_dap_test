@@ -4,9 +4,13 @@ Test lldb-dap repl mode detection
 
 from typing import Optional
 
-from lldb_dap.dap_types import LaunchArgs, StackTraceArgs, StoppedEvent
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap.dap_types import (
+    LaunchArgs,
+    StackTraceArgs,
+    StoppedEvent,
+)
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 class TestDAP_repl_mode_detection(DAPTestCaseBase):
@@ -31,14 +35,14 @@ int main() {
 
     def setUp(self):
         super().setUp()
-        self.session = self.build_and_create_session()
+        self._session = self.build_and_create_session()
 
     def get_frame_id_from_event(self, stopped_event: StoppedEvent):
-        thread_id = self.expect_is_not_none(stopped_event.body.threadId)
+        thread_id = self.expect_not_none(stopped_event.body.threadId)
 
-        all_frames = self.session.request_and_respond(
+        all_frames = self._session.send_request(
             StackTraceArgs(thread_id)
-        ).body.stackFrames
+        ).result().body.stackFrames
 
         self.assertGreaterEqual(len(all_frames), 1, "Expected at least one frame.")
         return all_frames[0].id
@@ -46,14 +50,14 @@ int main() {
     def assertEvaluate(
         self, expression: str, regex: str, frame_id: Optional[int] = None
     ):
-        result = self.session.evaluate(
+        result = self._session.evaluate(
             expression, context="repl", frameId=frame_id
         ).result
         self.assertRegex(result, regex)
 
     def test_completions(self):
         program = self.getBuildArtifact("a.out")
-        session = self.session
+        session = self._session
         with session.configure(LaunchArgs(program)) as ctx:
             source = "main.cpp"
             breakpoint1_line = line_number(source, "// breakpoint 1")
@@ -72,7 +76,7 @@ int main() {
                 r"^$",
             )
 
-        stop_event = session.verify_stopped_on_breakpoint(after=ctx.process_event())
+        stop_event = session.verify_stopped_on_breakpoint(after=ctx.process_event)
         top_frame = self.get_frame_id_from_event(stop_event)
 
         self.assertEvaluate("user_command", "474747", top_frame)

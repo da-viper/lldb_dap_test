@@ -7,9 +7,9 @@ import json
 from dataclasses import asdict, dataclass
 from typing import List, Optional
 
-from lldb_dap.dap_types import Event, LaunchArgs
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap.dap_types import Event, LaunchArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 @dataclass(frozen=True)
@@ -54,7 +54,7 @@ int main(int argc, char const *argv[]) {
         with session.configure(launch_args) as ctx:
             breakpoint_line = line_number(source, "// breakpoint")
             session.resolve_source_breakpoints(source, [breakpoint_line])
-        process_event = ctx.process_event()
+        process_event = ctx.process_event
 
         stop_event = session.verify_stopped_on_breakpoint(after=process_event)
 
@@ -73,12 +73,10 @@ int main(int argc, char const *argv[]) {
         source = "main.c"
         program = self.getBuildArtifact("a.out")
         session = self.build_and_create_session()
-        process_event = session.launch_using_config(
-            LaunchArgs(program, stopOnEntry=True)
-        )
+        process_event = session.launch(LaunchArgs(program, stopOnEntry=True))
 
         session.verify_stopped_on_entry(after=process_event)
-        result = session.evaluate("`lldb-dap send-event stopped").result
+        result = session.do_evaluate("`lldb-dap send-event stopped").result().body.result
 
         self.assertRegex(
             result,

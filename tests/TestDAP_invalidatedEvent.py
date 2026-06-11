@@ -4,15 +4,10 @@ stack, variables, threads has changes but the client does not
 know about it.
 """
 
-# import lldbdap_testcase
-# from lldbsuite.test.lldbtest import line_number
-# from dap_server import Event
-
-
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldb_dap.dap_types import LaunchArgs, StackTraceArgs
-from lldb_dap.session_helpers import DAPTestSession
 from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs, StackTraceArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.session_helpers import DAPTestSession
 
 OTHER_H = r"""
 #ifndef OTHER_H
@@ -43,7 +38,7 @@ int main() {
     def verify_top_frame_name(
         self, session: DAPTestSession, frame_name: str, thread_id: int
     ):
-        response = session.request_and_respond(StackTraceArgs(thread_id))
+        response = session.stack_trace(thread_id)
         all_frames = response.body.stackFrames
 
         self.assertGreaterEqual(len(all_frames), 1, "Expected at least one frame.")
@@ -63,9 +58,9 @@ int main() {
             return_bp_line = line_number(other_source, "// thread return breakpoint")
             session.resolve_source_breakpoints(other_source, [return_bp_line])
 
-        stopped_event = session.verify_stopped_on_breakpoint(after=ctx.process_event())
+        stopped_event = session.verify_stopped_on_breakpoint(after=ctx.process_event)
 
-        thread_id = self.expect_is_not_none(
+        thread_id = self.expect_not_none(
             stopped_event.body.threadId, "expected a thread id."
         )
         stack_response = self.verify_top_frame_name(session, "add", thread_id)
@@ -88,7 +83,7 @@ int main() {
         )
 
         # confirm we are back at the main frame.
-        thread_id = self.expect_is_not_none(
+        thread_id = self.expect_not_none(
             invalid_event.body.threadId, "expected a thread id."
         )
         self.verify_top_frame_name(session, "main", thread_id)

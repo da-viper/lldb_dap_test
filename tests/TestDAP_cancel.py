@@ -3,9 +3,10 @@ Test lldb-dap cancel request
 """
 
 import time
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldb_dap.dap_types import CancelArgs, EvaluateArgs, LaunchArgs
-from lldb_dap.session_helpers import DAPTestSession
+
+from lldbsuite.test.tools.lldb_dap.dap_types import CancelArgs, EvaluateArgs, LaunchArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.session_helpers import DAPTestSession
 
 _BUSY_PROGRAM = r'''
 import time
@@ -39,6 +40,10 @@ int main(int argc, char const *argv[]) {
 }
 
 """
+    def build(self, filename=None):
+        super().build()
+        self.create_file(_BUSY_PROGRAM, "busy_loop.py")
+
 
     def async_blocking_request(self, session: DAPTestSession, count: int):
         """
@@ -53,14 +58,11 @@ int main(int argc, char const *argv[]) {
         return session.send_request(CancelArgs(requestId=requestId))
 
     def test_pending_request(self):
-        """
-        Tests cancelling a pending request.
-        """
+        """Tests cancelling a pending request."""
         program = self.getBuildArtifact("a.out")
-        # busy_loop = self.getSourcePath("busy_loop.py")
-        busy_loop = self.create_file(_BUSY_PROGRAM, "busy_loop.py")
+        busy_loop = self.getSourcePath("busy_loop.py")
         session = self.build_and_create_session()
-        process_event = session.launch_using_config(
+        process_event = session.launch(
             LaunchArgs(
                 program,
                 initCommands=[f"command script import {busy_loop}"],
@@ -76,20 +78,19 @@ int main(int argc, char const *argv[]) {
         # properly.
         pending_handle = self.async_blocking_request(session, count=10)
         cancel_handle = self.async_cancel(session, requestId=pending_handle.seq)
-        session.verify_configuration_done()
 
-        blocking_resp = session.get_response(blocking_handle)
+        blocking_resp = blocking_handle.result()
         self.assertEqual(blocking_resp.request_seq, blocking_handle.seq)
         self.assertEqual(blocking_resp.command, "evaluate")
         self.assertEqual(blocking_resp.success, True)
 
-        pending_resp = session.get_error_response(pending_handle)
+        pending_resp = pending_handle.error()
         self.assertEqual(pending_resp.request_seq, pending_handle.seq)
         self.assertEqual(pending_resp.command, "evaluate")
         self.assertEqual(pending_resp.success, False)
         self.assertEqual(pending_resp.message, "cancelled")
 
-        cancel_resp = session.get_response(cancel_handle)
+        cancel_resp = cancel_handle.result()
         self.assertEqual(cancel_resp.request_seq, cancel_handle.seq)
         self.assertEqual(cancel_resp.command, "cancel")
         self.assertEqual(cancel_resp.success, True)
@@ -98,10 +99,9 @@ int main(int argc, char const *argv[]) {
     def test_inflight_request(self):
         """Tests cancelling an inflight request."""
         program = self.getBuildArtifact("a.out")
-        busy_loop = self.create_file(_BUSY_PROGRAM, "busy_loop.py")
-        # busy_loop = self.getSourcePath("busy_loop.py")
+        busy_loop = self.getSourcePath("busy_loop.py")
         session = self.build_and_create_session()
-        process_event = session.launch_using_config(
+        process_event = session.launch(
             LaunchArgs(
                 program,
                 initCommands=[f"command script import {busy_loop}"],
@@ -115,13 +115,13 @@ int main(int argc, char const *argv[]) {
         time.sleep(0.5)
         cancel_handle = self.async_cancel(session, requestId=blocking_handle.seq)
 
-        blocking_resp = session.get_error_response(blocking_handle)
+        blocking_resp = blocking_handle.error()
         self.assertEqual(blocking_resp.request_seq, blocking_handle.seq)
         self.assertEqual(blocking_resp.command, "evaluate")
         self.assertEqual(blocking_resp.success, False)
         self.assertEqual(blocking_resp.message, "cancelled")
 
-        cancel_resp = session.get_response(cancel_handle)
+        cancel_resp = cancel_handle.result()
         self.assertEqual(cancel_resp.request_seq, cancel_handle.seq)
         self.assertEqual(cancel_resp.command, "cancel")
         self.assertEqual(cancel_resp.success, True)

@@ -1,7 +1,7 @@
 from unittest import expectedFailure
 
-from lldb_dap.dap_types import InitializeArgs
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.dap_types import InitializeArgs
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 
 class TestInitialization(DAPTestCaseBase):
@@ -16,9 +16,9 @@ int main() {
 """
 
     def test_initialize_event(self):
-        session = self.create_session()
+        session = self.create_session(disconnect_automatically=False)
         session.initialize_sequence(session.initialize_args)
-        session.do_disconnect()
+        session.disconnect()
         session.stop()
         self.assertFalse(session.is_running())
         with self.assertRaises(AssertionError):
@@ -33,7 +33,8 @@ int main() {
 
     def test_default_initialize(self):
         session = self.create_session()
-        capabilities = session.initialize_sequence(InitializeArgs()).body
+        init_args = InitializeArgs(adapterID="someId")
+        capabilities = session.initialize_sequence(init_args).body
 
         self.assertIsNotNone(capabilities)
         self.assertTrue(capabilities.supportsConfigurationDoneRequest)
@@ -41,9 +42,9 @@ int main() {
     def test_initialize_with_custom_client_id(self):
         session = self.build_and_create_session()
         init_args = InitializeArgs(adapterID="python", clientID="custom-test-client")
-        capabilities = session.initialize_sequence(init_args)
+        response = session.initialize_sequence(init_args)
 
-        self.assertIsNotNone(capabilities)
+        self.assertIsNotNone(response.body)
 
     @expectedFailure
     def test_initialize_with_missing_required_attribute(self):

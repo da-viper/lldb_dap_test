@@ -1,11 +1,8 @@
-from lldb_dap.dap_types import StoppedReason
 import sys
-import unittest
 
-
-from lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldb_dap.dap_types import LaunchArgs
 from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs, StoppedReason
+from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
 
 OTHER_C = r"""
 extern int foo(int x) {
@@ -82,7 +79,7 @@ int main(int argc, char const *argv[]) {
             session.resolve_source_breakpoints(
                 source, [breakpoint1_line, breakpoint2_line, breakpoint3_line]
             )
-        process_event = ctx.process_event()
+        process_event = ctx.process_event
         # Wait for the breakpoint before dlopen
         before_dlopen_event = session.verify_stopped_on_breakpoint(after=process_event)
 

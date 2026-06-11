@@ -1,3 +1,4 @@
+# FIXME: remove when LLDB_MINIMUM_PYTHON_VERSION > 3.8
 from __future__ import annotations
 
 import bisect
@@ -9,22 +10,12 @@ import socket
 import subprocess
 import threading
 import time
-from concurrent import futures
+from concurrent.futures import Future
 from dataclasses import asdict, dataclass, field, replace
 from pprint import pformat
-from typing import (
-    IO,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Protocol,
-    Tuple,
-    Type,
-    runtime_checkable,
-)
+from typing import IO, Callable, Optional, Protocol, Tuple, Type, runtime_checkable
 
-from lldb_dap.dap_types import (
+from .dap_types import (
     AnyEvent,
     DAPError,
     Event,
@@ -35,42 +26,29 @@ from lldb_dap.dap_types import (
 )
 
 
-class Timeout(object):
-    """Utility class to check for timeouts. Timer starts when the object is initialized,
-    and can be checked by calling timed_out(). Passing a timeout value of 0.0 or less
-    means a timeout will never be triggered, i.e. timed_out() will always return False.
-
-    It allows us to check for time
-    """
-
-    def __init__(self, duration_seconds: float):
-        self.start = self.now
-        self.duration = duration_seconds
-
-    def timed_out(self):
-        if self.duration <= 0.0:
-            return False
-        return self.elapsed_seconds > self.duration
-
-    @property
-    def elapsed_seconds(self):
-        return self.now - self.start
-
-    @property
-    def now(self):
-        return time.monotonic()
+# See lldbtest.Base.spawnSubprocess, which should help ensure any processes
+# created by the DAP client are terminated correctly when the test ends.
+class SubProcessSpawner(Protocol):
+    def __call__(
+        self,
+        executable: str,
+        args: list[str] | None = None,
+        extra_env: list[str] | None = None,
+        install_remote: bool = True,
+        **kwargs,
+    ) -> subprocess.Popen[bytes]: ...
 
 
 @dataclass(frozen=True)
 class DebugAdapterOptions:
     """The options passed when spawning the debug adapter."""
 
-    args: List[str] = field(default_factory=list)
-    env: Dict[str, str] = field(default_factory=dict)
+    args: list[str] = field(default_factory=list)
+    env: dict[str, str] = field(default_factory=dict)
     cwd: Optional[str] = None
-    init_commands: Optional[list[str]] = None
+    pre_init_commands: Optional[list[str]] = None
     log_file: Optional[str] = None
-    # sever_mode related options
+    # sever_mode related options.
     connection: Optional[str] = None
     connection_timeout: Optional[int] = None
 
@@ -79,16 +57,16 @@ class DebugAdapterOptions:
         return self.connection is not None
 
     def clone(self, **kwargs) -> DebugAdapterOptions:
-        """Creates a copy of this DebugAdapterOptions with specified fields modified."""
+        """Returns a copy with the given fields overridden."""
         return replace(self, **kwargs)
 
     def __repr__(self):
-        return f"{self.__class__.__name__}: {pformat(asdict(self), indent=2, compact=True)}"
+        return f"{type(self).__name__}: {pformat(asdict(self), indent=2, compact=True)}"
 
     def __post_init__(self):
-        # check connection options is not in args
+        # Check connection options is not in args.
         if "--connection" in self.args or "--connection-timeout" in self.args:
-            raise AssertionError(
+            raise DAPError(
                 f"--connection in adapter options, use the connection field instead {self}"
             )
 
@@ -105,29 +83,18 @@ class DebugAdapter:
 
     def __init__(self, executable: str, opts: DebugAdapterOptions):
         self.executable = executable
+        self._connection_count = 0
         self._is_server = opts.run_as_server
 
         # Setup the process args.
         process_args = [self.executable]
-        self._connection_count = 0
-
-        # TODO: remove this later.
-        if executable.endswith("lldb-dap"):
-            process_args.append("--no-lldbinit")
-            process_args.extend(
-                [
-                    "--pre-init-command",
-                    "log enable lldb event -T -f dap_event.log",
-                    "--pre-init-command",
-                    "log enable lldb conn -f dap_conn.log",
-                ]
-            )
         process_args.extend(opts.args)
 
-        if opts.init_commands:
-            process_args.extend(opts.init_commands)
+        if pre_init_commands := opts.pre_init_commands:
+            for command in pre_init_commands:
+                process_args.extend(["--pre-init-command", command])
 
-        # Verify we use are using the correct args in stdio or server mode
+        # Verify we are using the correct args in stdio or server mode.
         if opts.run_as_server:
             process_args.extend(["--connection", opts.connection])  # type: ignore
             if opts.connection_timeout:
@@ -137,8 +104,8 @@ class DebugAdapter:
         # Setup process environment.
         process_env = os.environ.copy()
         process_env.update(opts.env)
-        if opts.log_file:
-            process_env["LLDBDAP_LOG"] = opts.log_file
+        if log_file := opts.log_file:
+            process_env["LLDBDAP_LOG"] = log_file
 
         self._process = subprocess.Popen(
             process_args,
@@ -164,8 +131,10 @@ class DebugAdapter:
                 raise DAPError("Cannot create multiple connections in stdio mode")
             transport = _StdioTransport(self._process)
 
+        count = self._connection_count
+        connection_id = f"conn{count}" if self.is_server else "stdio"
         self._connection_count += 1
-        return DAPConnection(transport)
+        return DAPConnection(connection_id, transport)
 
     @property
     def is_server(self):
@@ -185,8 +154,6 @@ class DebugAdapter:
             self._process.wait(timeout=2.0)
         except subprocess.TimeoutExpired:
             self._process.kill()
-            # TODO: return this to the user?
-            outs, errs = self._process.communicate()
 
     def _read_listening_uri(self) -> str:
         # lldb-dap will print the listening address once the listener is
@@ -227,43 +194,33 @@ class EventHistory:
     """Thread-safe event log that tests block against to observe the adapter.
 
     Every event the debug adapter sends is recorded here by the read
-    thread, in the order it arrived. Tests don't read the log directly;
+    thread, in the order it arrived. Tests don't read the log directly,
     they call one of the `wait_for_*` methods, which block until a matching
-    event has been recorded (or return immediately if one already has).
-
-    Each wait is scoped to "events after some earlier message". A test
-    records some earlier event or response, performs an action, then asks
-    for the next event of a given kind that came after it. This means the
-    wait still works even if the event arrives before the test gets around
-    to asking for it. the log already holds it, and the wait resolves right
-    away instead of timing out.
-
-    Example:
-    Wait for a stop after stepping, without racing the adapter::
-
-      step_resp = session.step_in(thread_id=1)
-      # The StoppedEvent may arrive before or after this line; we do
-      # not care, because the wait looks for events after step_resp.
-      stopped = history.wait_for_event(StoppedEvent, after=step_resp)
-
-    Wait for any of several events (either is an acceptable outcome)::
-      end = history.wait_for_any_event(
-        (StoppedEvent, TerminatedEvent), after=continue_resp)
-
-    Narrow with a predicate::
-      hit = history.wait_for_event(
-          StoppedEvent,
-          after=launch_resp,
-          until=lambda e: e.body.reason == "breakpoint",
-      )
-
-    When the adapter disconnects or the session ends, call `close` to wake
-    every outstanding waiter with a `DAPError` instead of leaving them
-    hanging until their individual timeouts fire.
+    event has been recorded.
 
     Args:
-        timeout: Default timeout, in seconds, for `wait_for_*` calls that
-            do not pass a `timeout`.
+        timeout: Default timeout in seconds for `wait_for_*` functions.
+
+    Example:
+    Wait for a stop after stepping, without racing the adapter.
+
+    >>> step_resp = session.step_in(thread_id=1)
+    >>> # History will only check for events after the step_response sequence.
+    >>> stopped = history.wait_for_event(StoppedEvent, after=step_resp)
+
+    Wait for any of several events (either is an acceptable outcome).
+    >>> end = history.wait_for_any_event((StoppedEvent, TerminatedEvent), after=continue_resp)
+
+    Narrow with a predicate.
+
+    >>> hit = history.wait_for_event(
+    ...    StoppedEvent,
+    ...    after=launch_resp,
+    ...    until=lambda e: e.body.reason == "breakpoint",
+    ... )
+
+    Find the first Initialized event from the start of the history.
+    >>> init_event = history.wait_for_earliest_event(InitializedEvent)
     """
 
     def __init__(self, timeout: float):
@@ -297,7 +254,7 @@ class EventHistory:
             if self._is_closed:
                 raise DAPError(
                     f"history already closed with exception {self._closed_reason}"
-                    f"trying to closed again with {reason}"
+                    f"trying to close again with {reason}."
                 )
             self._is_closed = True
             self._closed_reason = reason
@@ -334,7 +291,7 @@ class EventHistory:
             assert len(self._sequences) == len(self._events)
             self._new_event_condition.notify_all()
 
-    def wait_for_first_event(
+    def wait_for_earliest_event(
         self,
         event_type: Type[AnyEvent],
         *,
@@ -381,7 +338,7 @@ class EventHistory:
             event_type: Event subclass to match.
             until: Optional predicate applied to each candidate. Only
                 events for which `until(event)` is true are accepted.
-            after: The prior event or response; only events whose `seq`
+            after: The prior event or response. Only events whose `seq`
                 is strictly greater are considered.
             timeout: Override the history's default timeout, in seconds.
             timeout_msg: Extra context appended to the `TimeoutError`
@@ -447,17 +404,16 @@ class EventHistory:
 
         def make_error_msg(is_timeout: bool = True):
             event_names = [x.__name__ for x in event_types]
-            prefix = "Timed out after {timeout}s" if is_timeout else "Error while"
-            err_msg = (
-                f"{prefix} waiting for any event that matches: {event_names}"
-                f" after sequence: {after_seq}"
-            )
+            prefix = f"Timed out after {timeout}s" if is_timeout else "Error while"
+            err_msg = f"{prefix} waiting for any event that matches: {event_names}"
+            err_msg += f" after sequence: {after_seq}."
+
             if timeout_msg:
-                err_msg += f"\n\t{timeout_msg}"
+                err_msg += f"\n\t{timeout_msg}."
 
             with self._new_event_condition:
-                last_seq = self._events[-1].seq if self._events else None
-            err_msg += f"\n\tlast seen event sequence: {last_seq}"
+                last_event = self._events[-1] if self._events else None
+            err_msg += f"\n\tlast seen event: {last_event}."
             return err_msg
 
         def is_event_and_matches_condition(evt: Event):
@@ -470,13 +426,14 @@ class EventHistory:
             matches = until(evt)
             return matches
 
-        timeout = timeout if timeout is not None else self._timeout
+        timeout = timeout or self._timeout
         try:
             event = self.__wait_until(
                 is_event_and_matches_condition, after_seq=after_seq, timeout=timeout
             )
         except DAPError as err:
-            err.args = (err.args[0] + make_error_msg(False),) + err.args[1:]
+            # Add extra context to the error.
+            err.args = (f"{err.args[0]}\n\t{make_error_msg(False)}", *err.args[1:])
             raise
 
         if event is None:
@@ -505,7 +462,7 @@ class EventHistory:
                 seq_len = len(self._sequences)
                 idx = bisect.bisect_right(self._sequences, after_seq, lo=start_idx)
 
-                # Scan forward until we find a matching type
+                # Scan forward until we find a matching type.
                 for event in itertools.islice(self._events, idx, seq_len):
                     if matches_condition(event):
                         return event
@@ -514,7 +471,6 @@ class EventHistory:
                 if self._is_closed:  # Can no longer receive new messages.
                     reason = self._closed_reason
                     last_evt = self._events[-1] if self._events else None
-
                     raise DAPError.history_closed(reason, last_evt) from reason
 
                 remaining_time = end_time - time.monotonic()
@@ -528,8 +484,8 @@ def redirect_stream(
 ) -> threading.Thread:
     """
     Creates a new thread that redirects stream from `in_stream` to
-    `out_stream`. We use this for the 'runInTerminal' process to send to the
-    session's output
+    `out_stream`. We use this for the 'runInTerminal' process to send stdio
+    to the session's output.
 
     Returns a thread that redirects the stream.
     """
@@ -541,12 +497,15 @@ def redirect_stream(
                 if not chunk:
                     break
 
-                out_stream.write(chunk.decode())
+                out_stream.write(chunk.decode(errors="replace"))
                 out_stream.flush()
 
     thread_name = f"redirect_{thread_name}"
     redirect_thread = threading.Thread(
-        target=read_loop, name=thread_name, args=[in_stream, out_stream]
+        target=read_loop,
+        name=thread_name,
+        args=[in_stream, out_stream],
+        daemon=True,
     )
     redirect_thread.start()
 
@@ -564,14 +523,11 @@ class Transport(Protocol):
             adapter is already running and exposes connection URI.
     """
 
-    def write(self, data: bytes):
-        ...
+    def write(self, data: bytes): ...
 
-    def read(self, n: int) -> bytes:
-        ...
+    def read(self, n: int) -> bytes: ...
 
-    def readline(self) -> bytes:
-        ...
+    def readline(self) -> bytes: ...
 
     def close(self):
         """Close the transport.
@@ -582,12 +538,7 @@ class Transport(Protocol):
 
     @property
     def is_alive(self) -> bool:
-        """Whether the underlying resource is still usable.
-
-        Returns:
-            `True` while the underlying process is running or the socket
-            is connected; else `False`
-        """
+        """Whether send or receive bytes through the transport."""
         ...
 
 
@@ -608,15 +559,17 @@ class DAPConnection:
     failures from the debug adapter.
     """
 
-    def __init__(self, transport: Transport):
+    def __init__(self, connection_id: str, transport: Transport):
         assert isinstance(transport, Transport)
+        self.id: str = connection_id
         self._transport = transport
 
-        self._pending_requests: dict[int, futures.Future[RawMessage]] = {}
-        self._sent_requests: dict[int, RawMessage] = {}
-        self._received_messages: List[RawMessage] = []
+        # A request that's been sent and is awaiting its response.
+        self._in_flight_requests: dict[int, tuple[RawMessage, Future[RawMessage]]] = {}
+        self._in_flight_lock = threading.Lock()
+        self._received_messages: list[RawMessage] = []
 
-        # event to sync when the Connection start listening for messages.
+        # Event to sync when the Connection start listening for messages.
         self._is_ready = threading.Event()
         self._is_ready.clear()
 
@@ -635,44 +588,19 @@ class DAPConnection:
         data = f"{header}{content}".encode("utf-8")
         return data
 
-    def send_request(self, request: Request):
+    def send_request(self, request: Request) -> Future[RawMessage]:
         seq = request.seq
-        # Create a future for this request.
-        response_future: futures.Future[RawMessage] = futures.Future()
-        self._pending_requests[seq] = response_future
+        response_future: Future[RawMessage] = Future()
         request_dict = request.to_dict()
+        with self._in_flight_lock:
+            self._in_flight_requests[seq] = (request_dict, response_future)
         self.send_message(request_dict)
-        self._sent_requests[seq] = request_dict
+        return response_future
 
     def send_message(self, message: dict):
-        assert self.is_alive(), f"'{self.__class__.__name__}' is not running"
+        assert self.is_alive(), f"'{type(self).__name__}' is not running"
         data = DAPConnection.encode_message(message)
         self._transport.write(data)
-
-    def get_response(self, seq: int, timeout: float) -> RawMessage:
-        assert self._is_ready.is_set(), f"read loop not running call 'start'"
-        if seq not in self._sent_requests:
-            raise DAPError(f"no sent request for sequence: {seq}.")
-        if seq not in self._pending_requests:
-            raise DAPError(f"no pending request for seq: {seq}.")
-
-        sent_request = self._sent_requests[seq]
-        response_future = self._pending_requests[seq]
-
-        try:
-            response = response_future.result(timeout=timeout)
-            del self._pending_requests[seq]
-            DAPConnection.validate_response(sent_request, response)
-            return response
-        except (TimeoutError, futures.TimeoutError):
-            raise TimeoutError(
-                f"Request '{sent_request['command']}' timed out after {timeout}s"
-                f"\n\t{sent_request=}"
-            )
-        except ConnectionError as e:
-            raise DAPError(
-                f"Session ended before getting response for {sent_request}"
-            ) from e
 
     def is_alive(self):
         return self._transport.is_alive
@@ -680,51 +608,52 @@ class DAPConnection:
     def wait_until_alive(self, timeout: float):
         return self._is_ready.wait(timeout)
 
-    @staticmethod
-    def validate_response(request: RawMessage, response: RawMessage) -> None:
-        if request["command"] != response["command"]:
-            raise ValueError(
-                f"command mismatch in response {request['command']} != {response['command']}"
-            )
-        if request["seq"] != response["request_seq"]:
-            raise ValueError(
-                f"seq mismatch in response {request['seq']} != {response['request_seq']}"
-            )
-
     def _read_loop(self, handler: MessageHandler):
+        error = None
         try:
             while self.is_alive():
-                try:
+                message = self._read_message()
+                if not message:
+                    break
 
-                    message = self._read_message()
-                    if not message:
-                        break
+                self._received_messages.append(message)
+                self._on_message(message, handler)
 
-                    self._received_messages.append(message)
-                    self._on_message(message, handler)
-                except Exception as e:
-                    for future in self._pending_requests.values():
-                        if future.done():
-                            continue
+        except Exception as e:
+            error = e
+        finally:
+            # Reject any unresolved requests so the test thread don't wait the
+            # full timeout when the adapter exits or gets killed.
+            with self._in_flight_lock:
+                pending_futures = [f for _, f in self._in_flight_requests.values()]
 
-                        future.set_exception(e)
+            resp_error = error or DAPError("DAP connection closed before response.")
+            for future in pending_futures:
+                if not future.done():
+                    future.set_exception(resp_error)
 
-                    self.stop()
-                    if on_close := handler.on_close:
-                        on_close(e)
-
-                    return
-            self.stop()
-            if on_close := handler.on_close:
-                on_close(None)
-        except Exception:
-            pass
+            with contextlib.suppress(Exception):
+                self.stop()
+                if on_close := handler.on_close:
+                    on_close(error)
 
     def _on_message(self, message: RawMessage, handler: MessageHandler):
         msg_type = message.get("type")
         if msg_type == "response":
             request_seq = message["request_seq"]
-            self._pending_requests[request_seq].set_result(message)
+            with self._in_flight_lock:
+                in_flight = self._in_flight_requests.pop(request_seq, None)
+            if in_flight is not None:
+                request, response_future = in_flight
+                if request["command"] == message["command"]:
+                    response_future.set_result(message)
+                else:
+                    response_future.set_exception(
+                        ValueError(
+                            f"command mismatch in response"
+                            f"{request['command']} != {message['command']}"
+                        )
+                    )
             handler.on_response(message)
 
         elif msg_type == "event":
@@ -817,7 +746,12 @@ class _StdioTransport:
     def is_alive(self):
         if self._is_closed:
             return False
-        return self._process.poll() is None
+
+        # On Unix-like systems, attaching a debugger via ptrace temporarily reparents
+        # the target process. This breaks Python's internal waitpid() tracking, causing
+        # Popen.poll() to falsely return 0. Python assumes the missing child process
+        # has already terminated cleanly, which leads to inaccurate status checks.
+        return not self._stdout.closed and not self._stdin.closed
 
 
 class _SocketTransport:

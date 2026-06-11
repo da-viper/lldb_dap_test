@@ -3,8 +3,8 @@ import json
 import unittest
 from typing import List
 
-from lldb_dap.dap_types import RawMessage
-from lldb_dap.utils import DAPConnection, MessageHandler, Transport
+from lldbsuite.test.tools.lldb_dap.dap_types import RawMessage
+from lldbsuite.test.tools.lldb_dap.utils import DAPConnection, MessageHandler, Transport
 
 
 class EchoClient:
@@ -16,12 +16,10 @@ class EchoClient:
 
 
 class TestDAPUtils_DAPConnection(unittest.TestCase):
-    """Something"""
-
     def test_round_trip(self):
         received_messages = self.raw_data()
         transport = self.create_transport(received_messages)
-        connection = DAPConnection(transport)
+        connection = DAPConnection("conn0", transport)
 
         client = EchoClient()
         handler = MessageHandler(
@@ -48,14 +46,6 @@ class TestDAPUtils_DAPConnection(unittest.TestCase):
         payload = {"nested": {"a": 1, "b": [1, 2, 3]}}
         _, _, body = DAPConnection.encode_message(payload).partition(b"\r\n\r\n")
         self.assertEqual(json.loads(body), payload)
-
-    def test_incomplete_message(self):
-        # TODO:
-        ...
-
-    def test_eof(self):
-        # TODO:
-        ...
 
     @staticmethod
     def create_transport(data: List[RawMessage]) -> Transport:

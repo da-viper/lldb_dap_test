@@ -1,11 +1,12 @@
-# NOTE: this module must not include 'from __future__ import annotations'
-# as the 'annotations' import changes some of the types hints to strings.
+# NOTE: this module must not include `from __future__ import annotations`
+# as the `annotations` import changes some of the types hints to strings.
 # especially when you have a forward declared type reference.
 # see https://peps.python.org/pep-0649/#motivation-for-this-pep
 # https://peps.python.org/pep-0749/#rejected-alternatives
 #
 # This module may not depend on any other module.
 
+from contextlib import suppress
 import copy
 import dataclasses
 import enum
@@ -56,7 +57,7 @@ T = TypeVar("T")
 class DAPError(AssertionError):
     """The base error for all DAP related errors
 
-    Inherits from assertion error because of unittests treats assertions as a failure
+    Inherits from assertion error because of unittests treats assertions outside of a test as a failure
     instead of a test error. see https://docs.python.org/3/library/unittest.html#unittest.TestCase.setUp
     """
 
@@ -133,7 +134,7 @@ class Response(ProtocolMessage):
     def __post_init__(self):
         assert (
             self.type == MessageType.RESPONSE
-        ), f"expected '{self.__class__.__name__}' to be of type response: {self}"
+        ), f"expected '{type(self).__name__}' to be of type response: {self}"
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -170,14 +171,13 @@ class Event(ProtocolMessage):
     __registry: ClassVar[Dict[str, Type]] = {}
 
     def __init_subclass__(cls, *, event: str, **kwargs):
-        # TODO: refine this
         super().__init_subclass__(**kwargs)
 
         assert event is not None
-        # attach metadata (not a field)
+        # Attach metadata (not a field of an event).
         cls.__message_type__ = event
 
-        # prevent duplicate types
+        # Prevent duplicate types.
         existing_event_class = Event.__registry.get(event)
         if existing_event_class is not None:
             raise Exception(
@@ -230,7 +230,7 @@ def args_protocol(cls):
     command_name = getattr(cls, "command_")
     if not issubclass(type(command_name), str):
         raise TypeError(
-            f"the command_ type \"{type(command_name)}\" for class '{cls.__name__}' must be string like"
+            f"the command_ type '{type(command_name)}' for class '{cls.__name__}' must be string like"
         )
 
     return cls
@@ -238,7 +238,7 @@ def args_protocol(cls):
 
 def _message_to_dict_impl(obj: typing.Any, skip_none: bool = True) -> typing.Any:
     if dataclasses.is_dataclass(obj):
-        fields = _get_dataclass_fields(obj.__class__)
+        fields = _get_dataclass_fields(type(obj))
         visited: Dict[str, Any] = {}
         for f in fields:
             dict_name = f.metadata.get("alias", f.name)
@@ -288,7 +288,7 @@ def _get_dataclass_fields(cls: Type) -> Tuple[dataclasses.Field, ...]:
     data_class_hints = typing.get_type_hints(cls)
     result: List[dataclasses.Field] = []
     for f in dataclasses.fields(cls):  # noqa
-        # Ignore 'command_' and 'response_class_'.
+        # Ignores 'command_' and 'response_class_'.
         if f.name.endswith("_"):
             continue
         f_copy = copy.copy(f)
@@ -391,10 +391,8 @@ def _generic_to_message(cls: Optional[Type], data: Any, scope: List[str]) -> Any
             return _dict_to_message_impl(matches[0], data, scope)
 
         for arg in matches:
-            try:
+            with suppress(TypeError, ValueError, AttributeError, AssertionError):
                 return _dict_to_message_impl(arg, data, scope)
-            except (TypeError, ValueError, AttributeError, AssertionError):
-                pass
 
         raise TypeError(
             f"no variant of {cls} matched {type(data).__name__} at {full_path}: {data!r}"
@@ -502,11 +500,10 @@ def _dict_to_message_impl(
         try:
             return cls(**deserialized)
         except TypeError as err:
-            raise TypeError(
-                f"failed to initialize '{cls.__name__}' at {full_path}"
-                f"\n\twith: {data!r}"
-                f"\n\terror: {err}"
-            ) from err
+            msg = f"\n\tfailed to initialize '{cls.__name__}' at '{full_path}' "
+            msg += f'\n\twith dict: "{data}"'
+            err.args = (err.args[0] + msg, *err.args[1:])
+            raise
 
     if cls in (str, int, float):
         if isinstance(data, cls):
@@ -546,15 +543,13 @@ def dict_to_message(cls: Type[T], raw_dict: RawMessage) -> T:
 
 @runtime_checkable
 class ArgsProtocol(Protocol[T]):  # type: ignore[misc]
-    __dataclass_fields__: ClassVar[dict]
+    __dataclass_fields__: ClassVar[Dict]
 
     @property
-    def response_class_(self) -> Type[T]:
-        ...
+    def response_class_(self) -> Type[T]: ...
 
     @property
-    def command_(self) -> str:
-        ...
+    def command_(self) -> str: ...
 
 
 class Console(StrEnum):
@@ -602,18 +597,12 @@ class InvalidatedAreas(StrEnum):
     VARIABLES = "variables"
 
 
-class ExceptionBreakMode(StrEnum):
-    NEVER = "never"
-    ALWAYS = "always"
-    UNHANDLED = "unhandled"
-    USER_UNHANDLED = "userUnhandled"
-
-
 class StartDebuggingRequestType(StrEnum):
     LAUNCH = "launch"
     ATTACH = "attach"
 
 
+ExceptionBreakMode = Literal["never", "always", "unhandled", "userUnhandled"]
 ChecksumAlgorithm = Literal["MD5", "SHA1", "SHA256", "timestamp"]
 
 ScopePresentationHint = Literal["arguments", "locals", "registers"]
@@ -685,18 +674,6 @@ class Breakpoint:
     instructionReference: Optional[str] = None
     offset: Optional[int] = None
     reason: Optional[str] = None
-
-    def update(self, other_instance: Any):
-        """Update this instance with values from another Breakpoint instance."""
-        if not isinstance(other_instance, Breakpoint):
-            raise ValueError(
-                f"update called with '{type(other_instance)}' instead of 'Breakpoint'"
-            )
-
-        instance_fields = vars(other_instance).items()
-        for field, value in instance_fields:
-            if value is not None:
-                setattr(self, field, value)
 
 
 @dataclass(frozen=True)
@@ -899,7 +876,7 @@ class CompletionItem:
     length: int = 0
 
     def __repr__(self):
-        # use json as it easier to see the diff on failure.
+        # Use json as it is easier to see the diff on failure.
         return json.dumps(asdict(self), indent=4)
 
     def clone(self, **kwargs) -> "CompletionItem":
@@ -1006,7 +983,7 @@ class Capabilities:
         metadata={"alias": "$__lldb_version"}, default=None
     )
 
-    # lldb-dap custom capability
+    # lldb-dap custom capability.
     supportsModuleSymbolsRequest: Optional[bool] = None
 
 
@@ -1064,7 +1041,6 @@ ReverseResponse = Union[RunInTerminalResponse, EmptyBodyResponse, ErrorResponse]
 
 
 @dataclass(frozen=True)
-@args_protocol
 class StartDebuggingRequestArgs:
     configuration: Dict[str, Any] = field(default_factory=dict)
     request: StartDebuggingRequestType = StartDebuggingRequestType.LAUNCH
@@ -1081,9 +1057,8 @@ class InitializeResponse(Response):
 @dataclass(frozen=True)
 @args_protocol
 class InitializeArgs:
-    # TODO Move this.
-    adapterID: str = "test"
-    clientID: Optional[str] = "dap-test"
+    adapterID: str
+    clientID: Optional[str] = None
     clientName: Optional[str] = None
     locale: Optional[str] = None
     linesStartAt1: Optional[bool] = None
@@ -1204,7 +1179,6 @@ class Configuration:
 @dataclass(frozen=True)
 @args_protocol
 class AttachArgs:
-    # TODO: do not set the default here for launch / attach args add it during  the session start
     restart: Optional[Any] = field(metadata={"alias": "__restart"}, default=None)
 
     attachCommands: Optional[List[str]] = None
@@ -1333,10 +1307,14 @@ class SetExceptionBreakpointsResponse(Response):
 
 
 @dataclass(frozen=True)
+@args_protocol
 class SetExceptionBreakpointsArgs:
     filters: List[str]
     filterOptions: Optional[List[ExceptionFilterOptions]] = None
     exceptionOptions: Optional[List[ExceptionOptions]] = None
+
+    command_ = "setExceptionBreakpoints"
+    response_class_ = SetExceptionBreakpointsResponse
 
 
 @dataclass(frozen=True)
@@ -1346,9 +1324,6 @@ class DAPTestGetTargetBreakpointsArgs:
     response_class_ = AnyBreakpointsResponse
 
 
-# ============================================================
-# dataBreakpointInfo
-# ============================================================
 @dataclass(frozen=True)
 class DataBreakpointInfoResponse(Response):
     @dataclass(frozen=True)
@@ -1386,6 +1361,7 @@ class SetDataBreakpointsArgs:
 
 
 @dataclass(frozen=True)
+@args_protocol
 class SetInstructionBreakpointsArgs:
     breakpoints: List[InstructionBreakpoint]
 
@@ -1462,6 +1438,7 @@ class StepInArgs:
 
 
 @dataclass(frozen=True)
+@args_protocol
 class StepOutArgs:
     threadId: int
     singleThread: Optional[bool] = None
@@ -1540,6 +1517,7 @@ class VariablesResponse(Response):
 
 
 @dataclass(frozen=True)
+@args_protocol
 class VariablesArgs:
     variablesReference: int
     filter: Optional[Literal["indexed", "named"]] = None
@@ -1589,6 +1567,7 @@ class SourceResponse(Response):
 
 
 @dataclass(frozen=True)
+@args_protocol
 class SourceArgs:
     sourceReference: int
     source: Optional[Source] = None
@@ -1634,6 +1613,44 @@ class ModulesArgs:
 
 
 @dataclass(frozen=True)
+class ModuleSymbol:
+    """Mirrors the `Symbol` struct produced by lldb-dap's `moduleSymbols`
+    request."""
+
+    id: int
+    isDebug: bool
+    isSynthetic: bool
+    isExternal: bool
+    type: str
+    fileAddress: int
+    size: int
+    name: str
+    loadAddress: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class ModuleSymbolsResponse(Response):
+    @dataclass(frozen=True)
+    class Body:
+        symbols: List[ModuleSymbol]
+        totalSymbols: Optional[int] = None
+
+    body: Body
+
+
+@dataclass(frozen=True)
+@args_protocol
+class ModuleSymbolsArgs:
+    moduleName: str
+    moduleId: str = ""
+    startIndex: Optional[int] = None
+    count: Optional[int] = None
+
+    command_ = "__lldb_moduleSymbols"
+    response_class_ = ModuleSymbolsResponse
+
+
+@dataclass(frozen=True)
 class EvaluateResponse(Response):
     @dataclass(frozen=True)
     class Body:
@@ -1663,31 +1680,6 @@ class EvaluateArgs:
     command_ = "evaluate"
     response_class_ = EvaluateResponse
 
-
-@dataclass(frozen=True)
-class SetExpressionArgs:
-    expression: str
-    value: str
-    frameId: Optional[int] = None
-    format: Optional[ValueFormat] = None
-
-
-@dataclass(frozen=True)
-class SetExpressionResponse(Response):
-    @dataclass(frozen=True)
-    class Body:
-        value: str
-        type: Optional[str] = None
-        presentationHint: Optional[VariablePresentationHint] = None
-        variablesReference: Optional[int] = None
-        namedVariables: Optional[int] = None
-        indexedVariables: Optional[int] = None
-        memoryReference: Optional[str] = None
-        valueLocationReference: Optional[int] = None
-
-    body: Body
-
-
 @dataclass(frozen=True)
 class StepInTargetsResponse(Response):
     @dataclass(frozen=True)
@@ -1707,15 +1699,22 @@ class StepInTargetsArgs:
 
 
 @dataclass(frozen=True)
-class GotoTargetsResponseBody:
-    targets: List[GotoTarget]
+class GotoTargetsResponse(Response):
+    class Body:
+        targets: List[GotoTarget]
+
+    body: Body
 
 
 @dataclass(frozen=True)
+@args_protocol
 class GotoTargetsArgs:
     source: Source
     line: int
     column: Optional[int] = None
+
+    command_ = "gotoTargets"
+    response_class_ = GotoTargetsResponse
 
 
 @dataclass(frozen=True)
@@ -1814,6 +1813,7 @@ class DisassembleResponse(Response):
 
 
 @dataclass(frozen=True)
+@args_protocol
 class DisassembleArgs:
     memoryReference: str
     instructionCount: int
@@ -1826,17 +1826,25 @@ class DisassembleArgs:
 
 
 @dataclass(frozen=True)
-class LocationsArgs:
-    locationReference: int
+class LocationsResponse(Response):
+    @dataclass(frozen=True)
+    class Body:
+        source: Source
+        line: int
+        column: Optional[int] = None
+        endLine: Optional[int] = None
+        endColumn: Optional[int] = None
+
+    body: Body
 
 
 @dataclass(frozen=True)
-class LocationsResponseBody:
-    source: Source
-    line: int
-    column: Optional[int] = None
-    endLine: Optional[int] = None
-    endColumn: Optional[int] = None
+@args_protocol
+class LocationsArgs:
+    locationReference: int
+
+    command_ = "locations"
+    response_class_ = LocationsResponse
 
 
 @dataclass(frozen=True)
