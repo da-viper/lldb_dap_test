@@ -71,23 +71,24 @@ int main(int argc, char const *argv[]) {
         """
         self.build()
         adapter = self.start_server(connection="listen://localhost:0")
-
         names = ["Alice", "Bob"]
+
+        sessions = [
+            self.create_session(adapter, disconnect_automatically=False) for _ in names
+        ]
+
         # Run each session on a different thread.
         with futures.ThreadPoolExecutor() as executor:
-            session_args = [
-                (self.create_session(adapter, disconnect_automatically=False), name)
-                for name in names
-            ]
             session_futures = [
-                executor.submit(self.run_debug_session, adapter, name)
-                for adapter, name in session_args
+                executor.submit(self.run_debug_session, session, name)
+                for session, name in zip(sessions, names)
             ]
+
             for session_future in futures.as_completed(session_futures):
-                session_future.result()
+                with self.subTest():
+                    session_future.result()
 
     @skipIfWindows
-    @unittest.skip("")
     def test_server_unix_socket(self):
         """
         Test launching a binary with a lldb-dap in server mode on a unix socket.
@@ -98,17 +99,16 @@ int main(int argc, char const *argv[]) {
         self.addTearDownHook(temp_dir.cleanup)
 
         adapter = self.start_server(connection="accept://" + socket_path)
-
         names = ["Alice", "Bob"]
+        sessions = [
+            self.create_session(adapter, disconnect_automatically=False) for _ in names
+        ]
+
         # Run each session on a different thread.
         with futures.ThreadPoolExecutor() as executor:
-            session_args = [
-                (self.create_session(adapter, disconnect_automatically=False), name)
-                for name in names
-            ]
             session_futures = [
-                executor.submit(self.run_debug_session, adapter, name)
-                for adapter, name in session_args
+                executor.submit(self.run_debug_session, session, name)
+                for session, name in zip(sessions, names)
             ]
             for session_future in futures.as_completed(session_futures):
                 session_future.result()
