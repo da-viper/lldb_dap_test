@@ -5,8 +5,8 @@ Test lldb-dap source request
 
 from lldbsuite.test.decorators import skipIfWindows
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs, SourceArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs, Source, SourceArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 class TestDAP_source(DAPTestCaseBase):
@@ -105,17 +105,15 @@ int main(int argc, char const *argv[]) {
             self.assertEqual(frame_source.path, want_source["path"])
 
             if want_source["containsSourceReference"]:
-                source_reference = self.expect_not_none(frame_source.sourceReference)
-                source_response = session.send_request(
-                    SourceArgs(source_reference)
-                ).result()
+                source_ref = self.expect_not_none(frame_source.sourceReference)
+                source_resp = session.send_request(SourceArgs(source_ref)).result()
                 self.assertGreater(
-                    len(source_response.body.content),
+                    len(source_resp.body.content),
                     0,
                     "verify content returned disassembly",
                 )
                 self.assertEqual(
-                    source_response.body.mimeType,
+                    source_resp.body.mimeType,
                     "text/x-lldb.disassembly",
                     "verify mime type returned",
                 )

@@ -5,8 +5,8 @@ Test lldb-dap setBreakpoints request
 
 from lldbsuite.test.decorators import skipIfWindows
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 class TestDAP_step(DAPTestCaseBase):
@@ -42,9 +42,9 @@ __attribute__((always_inline)) inline void inlined_fn() { not_inlined_fn(); }
 #endif // OTHER_H
 """
 
-    def build(self, filename=None):
+    def build(self, dictionary=None):
         self.create_file(self.OTHER_H, "other.h")
-        self.create_test_program_with_name("main.cpp")
+        super().build(dictionary)
 
     @skipIfWindows
     def test_step(self):
@@ -86,7 +86,7 @@ __attribute__((always_inline)) inline void inlined_fn() { not_inlined_fn(); }
         self.assertEqual(src1, src2, "verify step in source")
 
         # Now step out and verify
-        session.step_out()
+        thread.step_out()
         top_frame = thread.top_frame()
         x3 = top_frame.locals["x"].value_as_int
         (src3, line3) = top_frame.source_and_line()
@@ -95,7 +95,7 @@ __attribute__((always_inline)) inline void inlined_fn() { not_inlined_fn(); }
         self.assertEqual(src1, src3, "verify step in source")
 
         # Step over and verify
-        session.step_over()
+        thread.step_over()
         top_frame = thread.top_frame()
         x4 = top_frame.locals["x"].value_as_int
         (src4, line4) = top_frame.source_and_line()
@@ -108,8 +108,8 @@ __attribute__((always_inline)) inline void inlined_fn() { not_inlined_fn(); }
         # stepping behavior here, because the generated assembly code
         # depends highly on the compiler, its version, the operating
         # system, and many more factors.
-        session.step_over(granularity="instruction")
-        session.step_in(granularity="instruction")
+        thread.step_over(granularity="instruction")
+        thread.step_in(granularity="instruction")
 
     def test_step_over_inlined_function(self):
         """
@@ -119,7 +119,6 @@ __attribute__((always_inline)) inline void inlined_fn() { not_inlined_fn(); }
         program = self.getBuildArtifact("a.out")
         session = self.build_and_create_session()
         source_ = "main.cpp"
-        # TODO: should not use getSourcePath when porting
         source = self.getSourcePath("main.cpp")
         breakpoint_lines = [line_number(source, "// breakpoint 2")]
         step_over_pos = line_number(source, "// position_after_step_over")

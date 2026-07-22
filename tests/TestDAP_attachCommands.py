@@ -3,8 +3,8 @@ Test lldb-dap attach commands
 """
 
 from lldbsuite.test.decorators import skipIfNetBSD
-from lldbsuite.test.tools.lldb_dap.dap_types import AttachArgs, PauseArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import AttachArgs, PauseArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 ATTACH_H = r"""
 #ifndef LLDB_TEST_ATTACH_H
@@ -47,47 +47,36 @@ ATTACH_H = r"""
 class TestDAP_attachCommands(DAPTestCaseBase):
     SHARED_BUILD_TESTCASE = False
 
-    # TODO: NOTE THE SLEEP function is removed do the same when up-streaming it.
     TEST_PROGRAM = r"""
 #include "attach.h"
-#include <stdio.h>
-#ifdef _WIN32
-#include <process.h>
-#include <windows.h>
-#else
-#include <unistd.h>
+#ifdef _WIN32 
+#include <windows.h> 
+#define sleep_ms(ms) Sleep(ms) 
+#else 
+#include <unistd.h> 
+#define sleep_ms(ms) usleep((ms) * 1000) 
 #endif
 
+volatile int is_ready = 0;
+
 int main(int argc, char const *argv[]) {
-lldb_enable_attach();
+  lldb_enable_attach();
 
-  if (argc >= 2) {
-    // Create the synchronization token.
-    FILE *f = fopen(argv[1], "wx");
-    if (!f)
-      return 1;
-    fputs("\n", f);
-    fflush(f);
-    fclose(f);
+  while (!is_ready) {
+    sleep_ms(50); // breakpoint 1
   }
 
-  int is_first_time = 1;
-  volatile int ready = 0;
-  while (!ready) {
-    if (is_first_time) { 
-        // we use the printed pid to synchronize when change the ready variable in the debugger.
-        puts("infinite loop started");
-        is_first_time = 0;
-    }
-  }
-  return 0; // breakpoint 1
+  return 0; 
 }
 """
+    IS_C = True
+
+    def build(self, dictionary=None):
+        self.create_file(ATTACH_H, "attach.h")
+        super().build(dictionary)
 
     @skipIfNetBSD  # Hangs on NetBSD as well
     def test_commands(self):
-        # TODO: this test is still flaky and it is not because of dap but the pause
-        # I don't need to stop the process again after a pause.
         """
         Tests the "initCommands", "preRunCommands", "stopCommands",
         "exitCommands", "terminateCommands" and "attachCommands"
@@ -108,13 +97,12 @@ lldb_enable_attach();
         "terminateCommands" are a list of LLDB commands that get executed when
         the debugger session terminates.
         """
-        self.create_file(ATTACH_H, "attach.h")
         program = self.getBuildArtifact("a.out")
         session = self.build_and_create_session()
 
         # Here we just create a target and launch the process as a way to test
         # if we are able to use attach commands to create any kind of a target
-        # and use it for debugging
+        # and use it for debugging.
         attachCommands = [
             f'target create -d "{program}"',
             "process launch --stop-at-user-entry",
@@ -123,8 +111,8 @@ lldb_enable_attach();
         preRunCommands = ["image list a.out", "image dump sections a.out"]
         postRunCommands = ["help trace", "help process trace"]
         stopCommands = ["frame variable", "thread backtrace"]
-        exitCommands = ["expr 2+3", "expr 3+4"]
-        terminateCommands = ["expr 4+2"]
+        exitCommands = ["history -c 2"]
+        terminateCommands = ["platform status"]
 
         process_event = session.attach(
             AttachArgs(
@@ -161,49 +149,43 @@ lldb_enable_attach();
         # "stopCommands" that were run after we stop.
         session.do_continue()
 
-        # use the printed pid to synchronize when change the ready variable.
-        session.collect_stdout(after=output.event, until="infinite loop started")
-        pause_response = session.send_request(PauseArgs(stopped_thread_id)).result()
-        stopped_event = session.wait_for_stopped(after=pause_response)
+        before_pause = session.last_event()
+        session.send_request(PauseArgs(stopped_thread_id)).result()
+        session.wait_for_stopped_event(after=before_pause)
 
-        output = session.collect_console(after=output.event, until=stopCommands[-1])
+        output = session.collect_console(after=before_pause, until=stopCommands[-1])
         session.verify_commands("stopCommands", output.seen_texts, stopCommands)
 
-        # set the ready variable so that the process can continue to exit.
-        session.evaluate("`expr ready = 1")
-
-        # Continue until the program exits
+        # Continue until the program exits.
+        session.evaluate("`expression is_ready = 1", context="repl")
         session.continue_to_exit()
 
         # Get output from the console. This should contain both the
         # "exitCommands" that were run after the second breakpoint was hit
         # and the "terminateCommands" due to the debugging session ending
         output = session.collect_console(after=output.event, until=terminateCommands[0])
-        session.verify_commands("exitCommands", output.seen_texts, exitCommands)
-        session.verify_commands(
-            "terminateCommands", output.seen_texts, terminateCommands
-        )
+        output_texts = output.seen_texts
+        session.verify_commands("exitCommands", output_texts, exitCommands)
+        session.verify_commands("terminateCommands", output_texts, terminateCommands)
 
     def test_attach_command_process_failures(self):
         """
         Tests that a 'attachCommands' is expected to leave the debugger's
         selected target with a valid process.
         """
-        self.create_file(ATTACH_H, "attach.h")
         program = self.getBuildArtifact("a.out")
         session = self.build_and_create_session()
 
-        attachCommands = ['script print("oops, forgot to attach to a process...")']
         attach_args = AttachArgs(
             program=program,
-            attachCommands=attachCommands,
+            attachCommands=['script print("oops, forgot to attach to a process...")'],
         )
-        attach_handle = session.send_request(attach_args)
+        pending_attach = session.send_request(attach_args)
         session.verify_configuration_done(expected_success=False)
 
-        attach_response = attach_handle.error()
-        self.assertFalse(attach_response.success)
-        response_error = self.expect_not_none(attach_response.body.error)
+        attach_response = pending_attach.error()
+        response_body = self.expect_not_none(attach_response.body)
+        response_error = self.expect_not_none(response_body.error)
         self.assertIn(
             "attachCommands failed to attach to a process", response_error.format
         )
@@ -215,7 +197,6 @@ lldb_enable_attach();
         Tests that the "terminateCommands", that can be passed during
         attach, are run when the debugger is disconnected.
         """
-        self.create_file(ATTACH_H, "attach.h")
         program = self.getBuildArtifact("a.out")
         session = self.build_and_create_session(disconnect_automatically=False)
 
@@ -223,7 +204,7 @@ lldb_enable_attach();
         # if we are able to use attach commands to create any kind of a target
         # and use it for debugging
         attachCommands = [
-            'target create -d "%s"' % (program),
+            f"target create -d '{program}'",
             "process launch --stop-at-user-entry",
         ]
         terminateCommands = ["history -c 1"]
@@ -234,8 +215,7 @@ lldb_enable_attach();
                 terminateCommands=terminateCommands,
             )
         )
-        # Once it's disconnected the console should contain the
-        # "terminateCommands"
+        # Once it's disconnected the console should contain the "terminateCommands".
         session.disconnect(terminateDebuggee=True)
         output = session.collect_console(
             after=process_event, until=terminateCommands[0]

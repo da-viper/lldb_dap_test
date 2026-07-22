@@ -9,8 +9,8 @@ import time
 from lldbsuite.test import lldbutil
 from lldbsuite.test.decorators import expectedFailureNetBSD, skipIfWindows
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import AttachArgs, LaunchArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import AttachArgs, LaunchArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 class TestDAP_disconnect(DAPTestCaseBase):

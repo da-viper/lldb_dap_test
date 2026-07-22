@@ -3,8 +3,8 @@ Test lldb-dap command hooks
 """
 
 
-from lldbsuite.test.tools.lldb_dap.dap_types import AttachArgs, LaunchArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import AttachArgs, LaunchArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 class TestDAP_commands(DAPTestCaseBase):
@@ -88,7 +88,6 @@ class TestDAP_commands(DAPTestCaseBase):
         fake_command = "settings set foo bar"
         session = self.build_and_create_session()
         session.initialize_sequence(session.initialize_args)
-        session.collect_console
         attach_args = AttachArgs(
             program=program,
             attachCommands=["?!" + quiet_command, "!" + fake_command],

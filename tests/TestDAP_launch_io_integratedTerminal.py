@@ -8,7 +8,8 @@ from lldbsuite.test.decorators import (
     skipIfRemote,
     skipIfWindows,
 )
-from lldbsuite.test.tools.lldb_dap.dap_types import Console
+from lldbsuite.test.tools.lldb_dap import DAPTestSession
+from lldbsuite.test.tools.lldb_dap.types import Console
 
 try:
     from DAP_launch_io import DAP_launchIO
@@ -35,8 +36,8 @@ class TestDAP_launch_io_IntegratedTerminal(DAP_launchIO):
     def test_stderr_redirection(self):
         self.stderr_redirection(console=self.console)
 
-    def _get_debuggee_stdout(self) -> str:
-        return self._session.get_stdout()
+    def _get_debuggee_stdout(self, session: DAPTestSession) -> str:
+        return session.get_stdout()
 
-    def _get_debuggee_stderr(self) -> str:
-        return self._session.get_stderr()
+    def _get_debuggee_stderr(self, session: DAPTestSession) -> str:
+        return session.get_stderr()

@@ -3,8 +3,8 @@ Test exception behavior in DAP with signal.
 """
 
 from lldbsuite.test.decorators import skipIfNoSignals
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 @skipIfNoSignals

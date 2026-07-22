@@ -8,8 +8,8 @@ from dataclasses import asdict, dataclass
 from typing import List, Optional
 
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import Event, LaunchArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import Event, LaunchArgs, message_to_dict
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 @dataclass(frozen=True)
@@ -42,13 +42,12 @@ int main(int argc, char const *argv[]) {
         program = self.getBuildArtifact("a.out")
         custom_event_body = CustomEvent.Body(key=321, arr=[True])
 
+        custom_event_body_json = json.dumps(message_to_dict(custom_event_body))
         launch_args = LaunchArgs(
             program,
             stopCommands=[
                 "lldb-dap send-event my-custom-event ",
-                "lldb-dap send-event my-custom-event '{}'".format(
-                    json.dumps(asdict(custom_event_body))
-                ),
+                f"lldb-dap send-event my-custom-event '{custom_event_body_json}'",
             ],
         )
         with session.configure(launch_args) as ctx:
@@ -70,15 +69,14 @@ int main(int argc, char const *argv[]) {
         """
         Test sending an internal event produces an error.
         """
-        source = "main.c"
         program = self.getBuildArtifact("a.out")
         session = self.build_and_create_session()
         process_event = session.launch(LaunchArgs(program, stopOnEntry=True))
 
         session.verify_stopped_on_entry(after=process_event)
-        result = session.do_evaluate("`lldb-dap send-event stopped").result().body.result
+        expr_resp = session.do_evaluate("`lldb-dap send-event stopped").result()
 
         self.assertRegex(
-            result,
+            expr_resp.body.result,
             r"Invalid use of lldb-dap send-event, event \"stopped\" should be handled by lldb-dap internally.",
         )

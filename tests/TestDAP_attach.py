@@ -2,43 +2,82 @@
 Test lldb-dap attach request
 """
 
-import os
 import subprocess
-import time
-import unittest
 import uuid
-from typing import List, Optional
+from pathlib import Path
 
-from lldbsuite.test.tools.lldb_dap.dap_types import AttachArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-
-
-def wait_for_file_on_target(testcase: unittest.TestCase, file_path):
-    import time
-
-    MAX_ATTEMPTS = 5
-    timeout_seconds = 4 if "ASAN_OPTIONS" in os.environ else 1
-    for _ in range(MAX_ATTEMPTS):
-        command = ["/usr/bin/ls", file_path]
-        res = subprocess.run(command)
-        err, retcode, msg = res.stderr, res.returncode, res.stdout
-        if not err and retcode == 0:
-            break
-
-        time.sleep(timeout_seconds)
-    else:
-        testcase.fail(
-            "File %s not found even after %d attempts." % (file_path, MAX_ATTEMPTS)
-        )
+from lldbsuite.test import lldbutil
+from lldbsuite.test.decorators import (
+    expectedFailureWindows,
+    expectedFailureWindowsAndNoLLDBServer,
+    skipIf,
+    skipIfWasm,
+    skipIfWindowsAndLLDBServer,
+)
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import (
+    AttachArgs,
+    ProcessEvent,
+    ProgressStartEvent,
+)
 
 
 # Often fails on Arm Linux, but not specifically because it's Arm, something in
 # process scheduling can cause a massive (minutes) delay during this test.
-# @skipIf(oslist=["linux"], archs=["arm$"])
-@unittest.skip("NOT IMPLEMENTED")
+@skipIf(oslist=["linux"], archs=["arm$"])
+@skipIfWasm
 class TestDAP_attach(DAPTestCaseBase):
     SHARED_BUILD_TESTCASE = False
+
+    # TODO: this is different from the one that already exists
     TEST_PROGRAM = r"""
+#include "attach.h"
+#include <stdio.h>
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
+int main(int argc, char const *argv[]) {
+  lldb_enable_attach();
+
+  // Create the synchronization token.
+  if (argc >= 2) {
+    FILE *f = fopen(argv[1], "wx");
+    if (!f)
+        return 1;
+    fputs("\n", f);
+    fflush(f);
+    fclose(f);
+
+    // Wait on input from stdin. A debugger attach on macOS can interrupt
+    // getchar() and set the stream's error indicator (EINTR). ignore that and
+    // keep waiting until we actually receive a character.
+    while (1) {
+      int c = getchar();
+      if (c == EOF && ferror(stdin)) {
+        clearerr(stdin);
+        continue;
+      }
+      printf("char = %c\n", c);
+      break;
+    }
+  }
+
+  printf("pid = %i\n", getpid());
+  return 0; // breakpoint 1
+}
+"""
+    ATTACH_H = r"""
+#ifndef LLDB_TEST_ATTACH_H
+#define LLDB_TEST_ATTACH_H
+
+// On some systems (e.g., some versions of linux) it is not possible to attach
+// to a process without it giving us special permissions. This defines the
+// lldb_enable_attach macro, which should perform any such actions, if needed by
+// the platform.
+#if defined(__linux__)
 #include <sys/prctl.h>
 
 // Android API <= 16 does not have these defined.
@@ -58,86 +97,152 @@ class TestDAP_attach(DAPTestCaseBase):
     (void)prctl_result;                                                        \
   } while (0)
 
-#include <stdio.h>
-#ifdef _WIN32
-#include <process.h>
-#else
-#include <unistd.h>
-#endif
+#else // not linux
 
-int main(int argc, char const *argv[]) {
-  lldb_enable_attach();
+#define lldb_enable_attach()
 
-  if (argc >= 2) {
-    // Create the synchronization token.
-    FILE *f = fopen(argv[1], "wx");
-    if (!f)
-      return 1;
-    fputs("\n", f);
-    fflush(f);
-    fclose(f);
-  }
+#endif // defined(__linux__)
 
-  // Wait on input from stdin.
-  getchar();
-
-  printf("pid = %i\n", getpid());
-  return 0;
-}
+#endif // LLDB_TEST_ATTACH_H
 """
 
-    def spawn(self, program: str, args: Optional[List[str]] = None):
-        process_args = [program]
-        process_args.extend(args or [])
-        return subprocess.Popen(
-            process_args,
-            stdin=subprocess.PIPE,
+    def build(self, dictionary=None):
+        self.create_file(self.ATTACH_H, "attach.h")
+        super().build(dictionary)
+
+    def spawn(self, program: str, *, wait_for_sync: bool = True):
+        """Spawn the target and (by default) block until it has called `lldb_enable_attach`."""
+        sync_token = lldbutil.append_to_process_working_directory(
+            self, f"sync_{uuid.uuid4().hex}"
+        )
+        proc = self.spawnSubprocess(
+            executable=program,
+            args=[sync_token],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             universal_newlines=True,
         )
+        if wait_for_sync:
+            lldbutil.wait_for_file_on_target(self, sync_token)
 
-    def verify_pid(self, proc: subprocess.Popen):
-        self.assertIsNone(proc.poll())
-        out, _ = proc.communicate("foo")
+        self.subprocesses.append(proc)
+        return proc
 
+    def verify_pid(self, proc):
+        out, _ = proc.communicate("f")
+
+        self.assertIn(f"char = f", out)
         self.assertIn(f"pid = {proc.pid}", out)
-
-    def build_program_for_attach(self):
-        unique_name = str(uuid.uuid4())
-        filename = self.create_file(self.TEST_PROGRAM, "main.c")
-        program = self.compile_program(filename, unique_name)
-        return program
 
     def test_by_pid(self):
         """Tests attaching to a process by process ID."""
-        # TODO: change this.
-        program = self.build_program_for_attach()
+        program = self.build_for_attach()
         session = self.create_session()
 
         proc = self.spawn(program=program)
-        self.assertIsNone(proc.poll())
+        self.assertIsNone(proc.poll(), "process should be running")
 
         process_event = session.attach(AttachArgs(pid=proc.pid))
-        self.assertIsNone(proc.poll())
         self.assertEqual(process_event.body.systemProcessId, proc.pid)
         self.verify_pid(proc)
 
     def test_by_name(self):
         """Tests attaching to a process by process name."""
-        program = self.build_program_for_attach()
+        program = self.build_for_attach()
         session = self.create_session()
 
-        # Use a file as a synchronization point between test and inferior.
-        pid_file_path = self.create_file("", f"pid_file_{int(time.monotonic())}")
+        proc = self.spawn(program=program)
 
-        proc = self.spawn(program=program, args=[pid_file_path])
-        self.assertIsNone(proc.poll())
-        wait_for_file_on_target(self, pid_file_path)
-        wait_for_file_on_target(self, program)
-
-        time.sleep(10)
         process_event = session.attach(AttachArgs(program=program))
-        self.assertIsNone(proc.poll())
         self.assertEqual(process_event.body.systemProcessId, proc.pid)
         self.verify_pid(proc)
+
+    @expectedFailureWindowsAndNoLLDBServer()
+    def test_by_name_waitFor(self):
+        """
+        Tests waiting for, and attaching to a process by process name that
+        doesn't exist yet.
+        """
+        self.do_attach_waitFor(use_basename=False)
+
+    @expectedFailureWindows
+    @skipIfWindowsAndLLDBServer
+    def test_by_basename_waitFor(self):
+        """
+        Tests waiting for and attaching to a process by the process base name
+        that doesn't exist yet.
+        """
+        self.do_attach_waitFor(use_basename=True)
+
+    def do_attach_waitFor(self, use_basename: bool):
+        """Kick off attach with waitFor=True; spawn the target once lldb-dap
+        signals it has entered the wait-for-process polling loop."""
+        session = self.create_session()
+        program = self.build_for_attach()
+        attach_name = Path(program).name if use_basename else program
+
+        init_response = session.initialize_sequence(session.initialize_args)
+        pending = session.send_request(AttachArgs(program=attach_name, waitFor=True))
+
+        # Wait until lldb-dap is actually polling for the process before we
+        # spawn it, so we don't race the poll setup.
+        session.wait_for_event(
+            ProgressStartEvent,
+            until=lambda e: "Waiting to attach" in e.body.title,
+            after=init_response,
+            timeout_msg="Waiting for attach progress event.",
+        )
+
+        proc = self.spawn(program=program, wait_for_sync=False)
+
+        session.ensure_initialized()
+        session.verify_configuration_done()
+
+        process_event = session.wait_for_event(ProcessEvent, after=init_response)
+        pending.result("expects attach response.")
+
+        self.assertEqual(process_event.body.systemProcessId, proc.pid)
+        self.verify_pid(proc)
+
+    def test_attach_with_missing_session_debugger(self):
+        """
+        Test that attaching with only one of debuggerId/targetId specified
+        fails with the expected error message.
+        """
+        session = self.create_session()
+
+        # Test with only targetId specified (no debuggerId)
+        resp = session.initialize_and_launch(
+            AttachArgs(session=AttachArgs.Session(targetId=99999))
+        ).error()
+
+        message = self.expect_not_none(resp.body and resp.body.error)
+        self.assertIn(
+            "missing value at arguments.session.debuggerId",
+            message.format,
+        )
+
+    def test_attach_with_invalid_session(self):
+        """
+        Test that attaching with both debuggerId and targetId specified but
+        invalid fails with an appropriate error message.
+        """
+        session = self.create_session()
+
+        # Attach with both debuggerId=9999 and targetId=9999 (both invalid).
+        # Since debugger ID 9999 likely doesn't exist in the global registry,
+        # we expect a validation error.
+        pending = session.initialize_and_launch(
+            AttachArgs(session=AttachArgs.Session(targetId=9999, debuggerId=9999))
+        )
+        session.configuration_done().result_or_error()
+
+        resp = pending.error()
+        message = self.expect_not_none(resp.body and resp.body.error)
+        error_msg = message.format
+        # Either error is acceptable - both indicate the debugger reuse
+        # validation is working correctly
+        self.assertTrue(
+            "Unable to find existing debugger" in error_msg
+            or f"Expected debugger/target not found error, got: {error_msg}"
+        )

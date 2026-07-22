@@ -14,8 +14,8 @@ NOTE: The testcases do not include all possible configurations of consoles.
 from abc import abstractmethod
 from tempfile import NamedTemporaryFile
 
-from lldbsuite.test.tools.lldb_dap.dap_types import Console, LaunchArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase, DAPTestSession
+from lldbsuite.test.tools.lldb_dap.types import Console, LaunchArgs
 
 
 class DAP_launchIO(DAPTestCaseBase):
@@ -69,10 +69,10 @@ int main(int argc, char *argv[]) {
 
     def setUp(self):
         super().setUp()
-        self._session = self.build_and_create_session()
 
     def all_redirection(self, console: Console):
         """All three streams redirected to files. Verify every input path."""
+        session = self.build_and_create_session()
         program = self.getBuildArtifact("a.out")
         stdin_text = "from stdin"
         args_text = "from argv"
@@ -83,7 +83,8 @@ int main(int argc, char *argv[]) {
         ) as stdout, NamedTemporaryFile("rt") as stderr:
             stdin.write(stdin_text)
             stdin.flush()
-            self._session.launch(
+
+            session.launch(
                 LaunchArgs(
                     program,
                     stdio=[stdin.name, stdout.name, stderr.name],
@@ -92,7 +93,7 @@ int main(int argc, char *argv[]) {
                     env={"FROM_ENV": env_text},
                 )
             )
-            self._session.verify_process_exited()
+            session.verify_process_exited()
 
             out = stdout.read()
             err = stderr.read()
@@ -106,6 +107,7 @@ int main(int argc, char *argv[]) {
 
     def stdin_redirection(self, console: Console):
         """Only stdin redirected. Verify every input path via console output."""
+        session = self.build_and_create_session()
         program = self.getBuildArtifact("a.out")
         stdin_text = "from stdin"
         args_text = "from argv"
@@ -114,7 +116,7 @@ int main(int argc, char *argv[]) {
         with NamedTemporaryFile("w+t") as stdin:
             stdin.write(stdin_text)
             stdin.flush()
-            self._session.launch(
+            session.launch(
                 LaunchArgs(
                     program,
                     stdio=[stdin.name],
@@ -123,10 +125,10 @@ int main(int argc, char *argv[]) {
                     env={"FROM_ENV": env_text},
                 )
             )
-            self._session.verify_process_exited()
+            session.verify_process_exited()
 
-            out = self._get_debuggee_stdout()
-            err = self._get_debuggee_stderr()
+            out = self._get_debuggee_stdout(session)
+            err = self._get_debuggee_stderr(session)
             self.assertIn(f"[STDOUT][FROM_STDIN]: {stdin_text}", out)
             self.assertIn(f"[STDOUT][FROM_ARGV]: {args_text}", out)
             self.assertIn(f"[STDOUT][FROM_ENV]: {env_text}", out)
@@ -141,12 +143,13 @@ int main(int argc, char *argv[]) {
         stdin is not set up — the C++ program skips reading it because the
         file descriptor is a tty (would block).
         """
+        session = self.build_and_create_session()
         program = self.getBuildArtifact("a.out")
         args_text = "from argv"
         env_text = "from env"
 
         with NamedTemporaryFile("rt") as stdout:
-            self._session.launch(
+            session.launch(
                 LaunchArgs(
                     program,
                     stdio=[None, stdout.name],
@@ -155,10 +158,10 @@ int main(int argc, char *argv[]) {
                     env={"FROM_ENV": env_text},
                 )
             )
-            self._session.verify_process_exited()
+            session.verify_process_exited()
 
             out = stdout.read()
-            err = self._get_debuggee_stderr()
+            err = self._get_debuggee_stderr(session)
             self.assertIn(f"[STDOUT][FROM_ARGV]: {args_text}", out)
             self.assertIn(f"[STDOUT][FROM_ENV]: {env_text}", out)
 
@@ -167,12 +170,13 @@ int main(int argc, char *argv[]) {
 
     def stderr_redirection(self, console: Console):
         """Only stderr redirected. Verify argv and env paths."""
+        session = self.build_and_create_session()
         program = self.getBuildArtifact("a.out")
         args_text = "from argv"
         env_text = "from env"
 
         with NamedTemporaryFile("rt") as stderr:
-            self._session.launch(
+            session.launch(
                 LaunchArgs(
                     program,
                     stdio=[None, None, stderr.name],
@@ -181,9 +185,9 @@ int main(int argc, char *argv[]) {
                     env={"FROM_ENV": env_text},
                 )
             )
-            self._session.verify_process_exited()
+            session.verify_process_exited()
 
-            out = self._get_debuggee_stdout()
+            out = self._get_debuggee_stdout(session)
             err = stderr.read()
             self.assertIn(f"[STDOUT][FROM_ARGV]: {args_text}", out)
             self.assertIn(f"[STDOUT][FROM_ENV]: {env_text}", out)
@@ -192,7 +196,7 @@ int main(int argc, char *argv[]) {
             self.assertIn(f"[STDERR][FROM_ENV]: {env_text}", err)
 
     @abstractmethod
-    def _get_debuggee_stdout(self) -> str:
+    def _get_debuggee_stdout(self, session: DAPTestSession) -> str:
         """Retrieves the standard output (stdout) from the debuggee process.
 
         The default destination of the debuggee's stdout can vary based on how the debuggee
@@ -202,7 +206,7 @@ int main(int argc, char *argv[]) {
         raise RuntimeError(f"NotImplemented for {self}")
 
     @abstractmethod
-    def _get_debuggee_stderr(self) -> str:
+    def _get_debuggee_stderr(self, session: DAPTestSession) -> str:
         """Retrieves the standard error (stderr) from the debuggee process.
 
         The default destination of the debuggee's stderr can vary based on how the debuggee

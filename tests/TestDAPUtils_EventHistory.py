@@ -2,7 +2,7 @@ import threading
 import unittest
 from typing import List, Union
 
-from lldbsuite.test.tools.lldb_dap.dap_types import (
+from lldbsuite.test.tools.lldb_dap.types import (
     CapabilitiesEvent,
     DAPError,
     Event,
@@ -77,13 +77,18 @@ class TestDAPUtils_EventHistory(unittest.TestCase):
         """Test that events added to EventHistory are in sequential order"""
 
         history = EventHistory(timeout=10)
-        events = [
+        event_1 = Event.from_json(
             {
-                "body": {"category": "console", "output": "Running preInitCommands:\n"},
+                "body": {
+                    "category": "console",
+                    "output": "Running preInitCommands:\n",
+                },
                 "event": "output",
                 "seq": 2,
                 "type": "event",
-            },
+            }
+        )
+        event_2 = Event.from_json(
             {
                 "body": {
                     "category": "console",
@@ -92,13 +97,14 @@ class TestDAPUtils_EventHistory(unittest.TestCase):
                 "event": "output",
                 "seq": 1,
                 "type": "event",
-            },
-        ]
-        events = [Event.from_json(event) for event in events]
+            }
+        )
 
-        with self.assertRaises(AssertionError):
-            for event in events:
-                history.record(event)
+        history.record(event_1)
+        with self.assertRaises(DAPError) as ctx:
+            history.record(event_2)
+
+        self.assertIn("older than last event", str(ctx.exception))
 
     def test_wait_for_X_event_on_history_closed(self):
         """Tests `wait_for_first_event`, `wait_for_event` and `wait_for_any_event` when the history is closed.
@@ -191,9 +197,7 @@ class TestDAPUtils_EventHistory(unittest.TestCase):
             )
 
         # Test wait_for_any_event.
-        def sdl3_module_loaded_or_process_exited(
-            event: Union[ModuleEvent, ExitedEvent]
-        ):
+        def sdl3_module_loaded_or_process_exited(event):
             if isinstance(event, ModuleEvent):
                 return sdl3_module_loaded(event)
 
@@ -283,6 +287,5 @@ class TestDAPUtils_EventHistory(unittest.TestCase):
             self.assertIsInstance(seen_event, CapabilitiesEvent)
             self.assertTrue(seen_event.body.capabilities.supportsRestartRequest)
         finally:
-            # Clean up
             delayed_append.set()
             event_thread.join()

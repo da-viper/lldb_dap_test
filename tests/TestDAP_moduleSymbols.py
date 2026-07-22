@@ -3,8 +3,8 @@ Test lldb-dap moduleSymbols request
 """
 
 from lldbsuite.test.decorators import skipIfWindows
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs, ModuleSymbolsArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs, ModuleSymbolsArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 class TestDAP_moduleSymbols(DAPTestCaseBase):
@@ -35,9 +35,10 @@ int main() {
         start = 0
         page_size = 100
         while True:
-            response = session.send_request(
-                ModuleSymbolsArgs(moduleName="a.out", startIndex=start, count=page_size)
-            ).result()
+            module_sym_args = ModuleSymbolsArgs(
+                moduleName="a.out", startIndex=start, count=page_size
+            )
+            response = session.send_request(module_sym_args).result()
             symbols = response.body.symbols
             symbol_names.update(sym.name for sym in symbols)
 
@@ -45,8 +46,5 @@ int main() {
                 break
             start += page_size
 
-        expected_symbol_names = {"main", "func1", "func2"}
-        self.assertTrue(
-            expected_symbol_names.issubset(symbol_names),
-            f"expected symbols missing; got {symbol_names!r}",
-        )
+        for expected_symbol in ["main", "func1", "func2"]:
+            self.assertIn(expected_symbol, symbol_names)

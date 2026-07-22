@@ -2,16 +2,23 @@
 Test lldb-dap stackTrace request
 """
 import os
-from typing import List
+from typing import List, NamedTuple
 
 from lldbsuite.test.decorators import skipIfWindows
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import (
+from lldbsuite.test.tools.lldb_dap.types import (
     LaunchArgs,
     StackFrame,
     StackFrameFormat,
 )
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
+
+
+class RecurseSource(NamedTuple):
+    path: str
+    end_line: int
+    call_line: int
+    invocation_line: int
 
 
 class TestDAP_stackTrace(DAPTestCaseBase):
@@ -34,32 +41,35 @@ int main(int argc, char const *argv[]) {
 }
 """
 
-    source_path: str
-    recurse_end: int
-    recurse_call: int
-    recurse_invocation: int
-
     def verify_stack_frames(self, start_idx: int, stack_frames: List[StackFrame]):
+        recourse_source = self.recourse_source
         for frame_idx, frame in enumerate(stack_frames, start_idx):
             # Don't care about frames above main.
             if frame_idx > 40:
                 return
-            self.verify_stack_frame(frame_idx, frame)
+            self.verify_stack_frame(frame_idx, frame, recourse_source)
 
-    def verify_stack_frame(self, frame_idx: int, stackFrame: StackFrame):
-        frame_name = stackFrame.name
-        frame_source = self.expect_not_none(stackFrame.source)
+    def verify_stack_frame(
+        self,
+        frame_idx: int,
+        stack_frame: StackFrame,
+        r_source: RecurseSource,
+    ):
+        frame_name = stack_frame.name
+        frame_source = self.expect_not_none(stack_frame.source)
         frame_source_path = frame_source.path
-        frame_line = stackFrame.line
+        frame_line = stack_frame.line
+
         if frame_idx == 0:
-            expected_line = self.recurse_end
+            expected_line = r_source.end_line
             expected_name = "recurse"
         elif frame_idx < 40:
-            expected_line = self.recurse_call
+            expected_line = r_source.call_line
             expected_name = "recurse"
         else:
-            expected_line = self.recurse_invocation
+            expected_line = r_source.invocation_line
             expected_name = "main"
+
         self.assertEqual(
             frame_name,
             expected_name,
@@ -67,8 +77,8 @@ int main(int argc, char const *argv[]) {
         )
         self.assertEqual(
             frame_source_path,
-            self.source_path,
-            f'frame #{frame_idx} source "{frame_source_path}" == "{self.source_path}"',
+            r_source.path,
+            f'frame #{frame_idx} source "{frame_source_path}" == "{r_source.path}"',
         )
         self.assertEqual(
             frame_line,
@@ -80,16 +90,18 @@ int main(int argc, char const *argv[]) {
         """Test the 'stackTrace' packet and all its variants."""
         program = self.getBuildArtifact("a.out")
         session = self.build_and_create_session()
-        source = self.getSourcePath("main.c")
-        self.source_path = os.path.realpath(source)
-        self.recurse_end = line_number(source, "recurse end")
-        self.recurse_call = line_number(source, "recurse call")
-        self.recurse_invocation = line_number(source, "recurse invocation")
+        source_file = self.getSourcePath("main.c")
+        self.recourse_source = RecurseSource(
+            path=os.path.realpath(source_file),
+            end_line=line_number(source_file, "recurse end"),
+            call_line=line_number(source_file, "recurse call"),
+            invocation_line=line_number(source_file, "recurse invocation"),
+        )
 
         with session.configure(LaunchArgs(program=program)) as ctx:
             # Set a breakpoint at the point of deepest recursion.
             breakpoint_ids = session.resolve_source_breakpoints(
-                source, [self.recurse_end]
+                source_file, [self.recourse_source.end_line]
             )
 
         stop_event = session.verify_stopped_on_breakpoint(
@@ -286,19 +298,17 @@ int main(int argc, char const *argv[]) {
             breakpoint_ids, after=ctx.process_event
         )
         thread_id = self.expect_not_none(stop_event.body.threadId)
-
         modules = session.get_modules()
-        name_to_id = {name: info.id for name, info in modules.items()}
-
         stack_frames = session.stack_trace(thread_id).body.stackFrames
+
         for frame in stack_frames:
             module_id = frame.moduleId
             source_name = frame.source and frame.source.name
             if module_id is None or source_name is None:
                 continue
 
-            if source_name in name_to_id:
-                expected_id = name_to_id[source_name]
+            if source_name in modules:
+                expected_id = modules[source_name].id
                 self.assertEqual(
                     module_id,
                     expected_id,

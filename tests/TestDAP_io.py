@@ -3,7 +3,7 @@ Test lldb-dap IO handling.
 """
 
 
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 EXIT_FAILURE = 1
 EXIT_SUCCESS = 0
@@ -14,18 +14,9 @@ class TestDAP_io(DAPTestCaseBase):
         adapter = self.create_stdio_debug_adapter()
         self.assertTrue(adapter.is_alive)
         self.assertIsNotNone(adapter.process)
+
         process = adapter.process
-
-        def cleanup():
-            # If the process is still alive, kill it.
-            if process.poll() is None:
-                process.kill()
-                process.wait()
-
-        # Execute the cleanup function during test case tear down.
-        self.addTearDownHook(cleanup)
-
-        assert process.stdin is not None
+        self.assertIsNotNone(process.stdin)
         return process
 
     def test_eof_immediately(self):

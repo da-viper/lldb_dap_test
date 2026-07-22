@@ -4,8 +4,8 @@ Test lldb-dap RestartRequest.
 
 from lldbsuite.test.decorators import skipIfWindows
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 class TestDAP_restart(DAPTestCaseBase):
@@ -50,11 +50,11 @@ int main(int argc, char const *argv[], char const *envp[]) {
         )
 
         # Restart then check we stop back at A and program state has been reset.
-        last_response = session.last_response()
+        last_event = session.last_event()
         resp = session.do_restart()
         self.assertTrue(resp.success)
 
-        stop_event = session.verify_stopped_on_breakpoint(bp_A, after=last_response)
+        stop_event = session.verify_stopped_on_breakpoint(bp_A, after=last_event)
         thread_ctx = session.thread_context_from(stop_event)
         i_val = thread_ctx.top_frame().locals["i"]
         self.assertEqual(
@@ -104,13 +104,13 @@ int main(int argc, char const *argv[], char const *envp[]) {
         # should be 1.
         self.assertEqual(argc_val.value_as_int, 1, "argc != 1 before restart")
 
-        last_response = session.last_response()
+        last_event = session.last_event()
         # Restart with some extra 'args' and check that the new argc reflects
         # the updated launch config.
         resp = session.do_restart(LaunchArgs(program, args=["a", "b", "c", "d"]))
         self.assertTrue(resp.success)
 
-        stop_event = session.verify_stopped_on_breakpoint(bp_A, after=last_response)
+        stop_event = session.verify_stopped_on_breakpoint(bp_A, after=last_event)
         thread_ctx = session.thread_context_from(stop_event)
         argc_val = thread_ctx.top_frame().locals["argc"]
         self.assertEqual(argc_val.value_as_int, 5, "argc != 5 after restart")

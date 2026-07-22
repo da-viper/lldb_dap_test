@@ -1,3 +1,4 @@
+import os
 import platform
 import sys
 from typing import Callable, List, TypeVar
@@ -23,12 +24,26 @@ def skipIfPlatform(oslist: List[str]):
     )
 
 
-def expected_failure_platform(oslist: List[str]):
+def skipIfWasm(func):
+    """Decorate the item to skip tests that should be skipped on WebAssembly."""
+    return skipIfPlatform(["wasip1", "wasi"])(func)
+
+
+def skipIfLLVMTargetMissing(target: str):
+    return unittest.skipIf(False, f"missing target {target}")
+
+
+def expectedFailureOS(oslist: List[str], *_):
     """Decorate the item to skip tests if running on one of the listed platforms."""
     # This decorator cannot be ported to `skipIf` yet because it is used on entire
     # classes, which `skipIf` explicitly forbids.
+
     oslist = [name.lower() for name in oslist]
-    if sys.platform.lower() in oslist:
+    return expectedFailureIf(lambda: sys.platform.lower() in oslist)
+
+
+def expectedFailureIf(cond: Callable):
+    if cond():
         return unittest.expectedFailure
 
     def null_opt(func: Callable[..., T]):
@@ -43,15 +58,15 @@ def skipIfNoSignals(func):
 
 
 def expectedFailureNetBSD(func: Callable[..., T], bugnumber=None):
-    return expected_failure_platform(["netbsd"])(func)
+    return expectedFailureOS(["netbsd"])(func)
 
 
 def expectedFailureAll(oslist: List[str] = [], **kwargs):
-    return expected_failure_platform(oslist)
+    return expectedFailureOS(oslist)
 
 
 def expectedFailureWindows(func: Callable[..., T]):
-    return expected_failure_platform(["windows"])(func)
+    return expectedFailureOS(["windows"])(func)
 
 
 def skipUnlessPlatform(oslist: List[str]):
@@ -100,6 +115,7 @@ def no_debug_info_test(func: Callable[..., T]):
 
 def skipUnlessUndefinedBehaviorSanitizer(func: Callable[..., T]):
     return func
+
 
 def skipUnlessAddressSanitizer(func):
     return func
@@ -153,6 +169,36 @@ def skipIf(
     asan=None,
 ):
     return skipIfPlatform(["skipif"])
+
+
+def _usingLLDBServerOnWindows():
+    """Return True if Windows tests should drive lldb-server instead of the
+    in-process Win32 ``windows`` process plugin.
+
+    The choice is controlled by the ``LLDB_USE_LLDB_SERVER`` environment
+    variable: unset/off selects the default in-process plugin, on selects
+    the gdb-remote path through ``lldb-server``.
+    """
+    return os.environ.get("LLDB_USE_LLDB_SERVER", "").lower() in (
+        "on",
+        "yes",
+        "1",
+        "true",
+    )
+
+
+def expectedFailureWindowsAndNoLLDBServer(bugnumber=None):
+    """Mark a test as xfail on Windows when using the in-process plugin."""
+    if _usingLLDBServerOnWindows():
+        return lambda func: func
+    return expectedFailureOS(["windows"], bugnumber)
+
+
+def skipIfWindowsAndLLDBServer(func):
+    """Skip tests on Windows when driving lldb-server."""
+    if not _usingLLDBServerOnWindows():
+        return func
+    return skipIfPlatform(["windows"])(func)
 
 
 def add_test_categories(cat: List[str]):

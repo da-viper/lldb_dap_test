@@ -4,8 +4,8 @@ Test lldb-dap cancel request
 
 import time
 
-from lldbsuite.test.tools.lldb_dap.dap_types import CancelArgs, EvaluateArgs, LaunchArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import CancelArgs, EvaluateArgs, LaunchArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 from lldbsuite.test.tools.lldb_dap.session_helpers import DAPTestSession
 
 _BUSY_PROGRAM = r'''
@@ -40,10 +40,10 @@ int main(int argc, char const *argv[]) {
 }
 
 """
+
     def build(self, filename=None):
         super().build()
         self.create_file(_BUSY_PROGRAM, "busy_loop.py")
-
 
     def async_blocking_request(self, session: DAPTestSession, count: int):
         """

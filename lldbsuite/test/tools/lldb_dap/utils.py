@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import bisect
 import contextlib
+import io
 import itertools
 import json
 import os
@@ -15,7 +16,7 @@ from dataclasses import asdict, dataclass, field, replace
 from pprint import pformat
 from typing import IO, Callable, Optional, Protocol, Tuple, Type, runtime_checkable
 
-from .dap_types import (
+from .types import (
     AnyEvent,
     DAPError,
     Event,
@@ -36,7 +37,8 @@ class SubProcessSpawner(Protocol):
         extra_env: list[str] | None = None,
         install_remote: bool = True,
         **kwargs,
-    ) -> subprocess.Popen[bytes]: ...
+    ) -> subprocess.Popen[bytes]:
+        ...
 
 
 @dataclass(frozen=True)
@@ -94,6 +96,9 @@ class DebugAdapter:
             for command in pre_init_commands:
                 process_args.extend(["--pre-init-command", command])
 
+        process_args.extend(
+            ["--pre-init-command", "log enable lldb comm -T -f communication.log"]
+        )
         # Verify we are using the correct args in stdio or server mode.
         if opts.run_as_server:
             process_args.extend(["--connection", opts.connection])  # type: ignore
@@ -293,7 +298,7 @@ class EventHistory:
 
     def wait_for_earliest_event(
         self,
-        event_type: Type[AnyEvent],
+        event_type: Type[AnyEvent] | Tuple[Type[AnyEvent], ...],
         *,
         until: Optional[Callable[[AnyEvent], bool]] = None,
         timeout: Optional[float] = None,
@@ -307,9 +312,12 @@ class EventHistory:
 
         Raises the same exceptions as `wait_for_event`.
         """
-        assert issubclass(event_type, Event)
+        if isinstance(event_type, tuple):
+            event_types = event_type
+        else:
+            event_types = (event_type,)
+        assert all(issubclass(et, Event) for et in event_types)
 
-        event_types = tuple((event_type,))
         return self.__wait_for_any_event(
             event_types,
             after_seq=0,
@@ -443,6 +451,16 @@ class EventHistory:
         assert isinstance(event, event_types)
         return event
 
+    def last_event(self) -> Event:
+        with self._new_event_condition:
+            if self._events:
+                return self._events[-1]
+
+        # There is no event with the sequence 0.
+        # This exist in order provide the last event since the event list is empty.
+        anchor_event = Event(seq=0, type=MessageType.EVENT, event="anchor_first_event")
+        return anchor_event
+
     def __wait_until(
         self,
         matches_condition: Callable[[Event], bool],
@@ -479,8 +497,28 @@ class EventHistory:
                 self._new_event_condition.wait(remaining_time)
 
 
+class OutputBuffer:
+    """A Thread safe io.StringIO."""
+
+    def __init__(self):
+        self._buf = io.StringIO()
+        self._lock = threading.Lock()
+
+    def write(self, text: str) -> int:
+        with self._lock:
+            return self._buf.write(text)
+
+    def flush(self):
+        with self._lock:
+            self._buf.flush()
+
+    def getvalue(self) -> str:
+        with self._lock:
+            return self._buf.getvalue()
+
+
 def redirect_stream(
-    in_stream: IO[bytes], out_stream: IO[str], thread_name: str
+    in_stream: IO[bytes], out_buffer: OutputBuffer, thread_name: str
 ) -> threading.Thread:
     """
     Creates a new thread that redirects stream from `in_stream` to
@@ -490,21 +528,21 @@ def redirect_stream(
     Returns a thread that redirects the stream.
     """
 
-    def read_loop(in_stream: IO[bytes], out_stream: IO[str]):
+    def read_loop(in_stream: IO[bytes], out_buffer: OutputBuffer):
         with contextlib.suppress(OSError, ValueError):  # Nothing to report.
             while True:
                 chunk = in_stream.read(4096)
                 if not chunk:
                     break
 
-                out_stream.write(chunk.decode(errors="replace"))
-                out_stream.flush()
+                out_buffer.write(chunk.decode(errors="replace"))
+                out_buffer.flush()
 
     thread_name = f"redirect_{thread_name}"
     redirect_thread = threading.Thread(
         target=read_loop,
         name=thread_name,
-        args=[in_stream, out_stream],
+        args=[in_stream, out_buffer],
         daemon=True,
     )
     redirect_thread.start()
@@ -523,11 +561,14 @@ class Transport(Protocol):
             adapter is already running and exposes connection URI.
     """
 
-    def write(self, data: bytes): ...
+    def write(self, data: bytes):
+        ...
 
-    def read(self, n: int) -> bytes: ...
+    def read(self, n: int) -> bytes:
+        ...
 
-    def readline(self) -> bytes: ...
+    def readline(self) -> bytes:
+        ...
 
     def close(self):
         """Close the transport.
@@ -567,6 +608,7 @@ class DAPConnection:
         # A request that's been sent and is awaiting its response.
         self._in_flight_requests: dict[int, tuple[RawMessage, Future[RawMessage]]] = {}
         self._in_flight_lock = threading.Lock()
+        # received_messages is not accessed anywhere. It only exists for debugging purposes.
         self._received_messages: list[RawMessage] = []
 
         # Event to sync when the Connection start listening for messages.
@@ -574,7 +616,6 @@ class DAPConnection:
         self._is_ready.clear()
 
     def start(self, handler: MessageHandler):
-        self._is_ready.set()
         self._read_loop(handler)
 
     def stop(self):
@@ -609,10 +650,11 @@ class DAPConnection:
         return self._is_ready.wait(timeout)
 
     def _read_loop(self, handler: MessageHandler):
+        self._is_ready.set()
         error = None
         try:
             while self.is_alive():
-                message = self._read_message()
+                message = DAPConnection.read_message(self._transport)
                 if not message:
                     break
 
@@ -626,6 +668,7 @@ class DAPConnection:
             # full timeout when the adapter exits or gets killed.
             with self._in_flight_lock:
                 pending_futures = [f for _, f in self._in_flight_requests.values()]
+                self._in_flight_requests = {}
 
             resp_error = error or DAPError("DAP connection closed before response.")
             for future in pending_futures:
@@ -665,13 +708,14 @@ class DAPConnection:
         else:
             raise DAPError(f"Unknown message type: {msg_type}")
 
-    def _read_message(self):
+    @staticmethod
+    def read_message(transport: Transport):
         HEADER_TERMINATOR = b"\r\n\r\n"
         CONTENT_LEN_PREFIX = b"Content-Length: "
         buffer = bytearray()
 
         while True:
-            chunk = self._transport.readline()
+            chunk = transport.readline()
             if not chunk:
                 if buffer:
                     raise EOFError(f"unexpected EOF when parsing header: {buffer}")
@@ -697,7 +741,7 @@ class DAPConnection:
             message_start = header_end + len(HEADER_TERMINATOR)
             buffer = buffer[message_start:]
             while len(buffer) < content_length:
-                chunk = self._transport.read(content_length - len(buffer))
+                chunk = transport.read(content_length - len(buffer))
                 if not chunk:
                     raise EOFError(f"unexpected EOF when parsing message: {buffer}")
                 buffer += chunk

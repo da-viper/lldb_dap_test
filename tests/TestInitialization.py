@@ -1,7 +1,7 @@
 from unittest import expectedFailure
 
-from lldbsuite.test.tools.lldb_dap.dap_types import InitializeArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import InitializeArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 class TestInitialization(DAPTestCaseBase):

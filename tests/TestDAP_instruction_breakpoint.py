@@ -1,13 +1,17 @@
+"""
+Test lldb-dap instruction breakpoints.
+"""
+
 import os
 import shutil
 
 from lldbsuite.test.decorators import skipIfWindows
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap import lldb_dap_testcase
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap import testcase
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs
 
 
-class TestDAP_InstructionBreakpointTestCase(lldb_dap_testcase.DAPTestCaseBase):
+class TestDAP_InstructionBreakpointTestCase(testcase.DAPTestCaseBase):
     NO_DEBUG_INFO_TESTCASE = True
 
     TEST_PROGRAM = r"""#include <cstdio>
@@ -31,97 +35,73 @@ int main(int argc, char const *argv[]) {
 
 """
 
-    def setUp(self):
-        super().setUp()
-
-        self.main_basename = "main-copy.cpp"
-        self.main_path = os.path.realpath(self.getBuildArtifact(self.main_basename))
-
-    def build(self):
-        # TODO: START -- this is not needed when we port
+    def build(self, dictionary=None):
         main_cpp = self.create_file(self.TEST_PROGRAM, "main.cpp")
-        shutil.copy(main_cpp, self.main_path)
-        self.create_test_program_with_name(self.main_path)
-        # end make
+        main_path = os.path.realpath(self.getBuildArtifact("main-copy.cpp"))
+        shutil.copy(main_cpp, main_path)
+        super().build({"filename": main_path})
 
     @skipIfWindows
     def test_instruction_breakpoint(self):
-        self.build()
-        self.instruction_breakpoint_test()
-
-    def instruction_breakpoint_test(self):
-        """Sample test to ensure SBFrame::Disassemble produces SOME output"""
-        # Create a target by the debugger.
-
+        """Set a source breakpoint, then use the disassembly to set an
+        instruction breakpoint on the next instruction and verify we hit it."""
         program = self.getBuildArtifact("a.out")
-        session = self.create_session()
+        session = self.build_and_create_session()
+
+        main_basename = "main-copy.cpp"
+        main_path = os.path.realpath(self.getBuildArtifact(main_basename))
         main_line = line_number("main.cpp", "breakpoint 1")
 
+        # Set a source breakpoint and check it was resolved against the
+        # renamed source file.
         with session.configure(LaunchArgs(program)) as ctx:
-            # Set source breakpoint 1
-            response = session.set_source_breakpoints(self.main_path, [main_line])
-            breakpoints = response.body.breakpoints
-            self.assertEqual(len(breakpoints), 1)
-            breakpoint = breakpoints[0]
-            self.assertEqual(
-                breakpoint.line, main_line, "incorrect breakpoint source line"
-            )
-            self.assertTrue(breakpoint.verified, "breakpoint is not verified")
-            breakpoint_source = self.expect_not_none(breakpoint.source)
-            self.assertEqual(
-                self.main_basename, breakpoint_source.name, "incorrect source name"
-            )
-            self.assertEqual(
-                self.main_path, breakpoint_source.path, "incorrect source file path"
-            )
-            other_breakpoint_id = self.expect_not_none(breakpoint.id)
+            response = session.set_source_breakpoints(main_path, [main_line])
+            [source_bp] = response.body.breakpoints
+            self.assertTrue(source_bp.verified, "breakpoint is not verified")
+            self.assertEqual(source_bp.line, main_line, "incorrect breakpoint line")
 
-        # Continue and then verify the breakpoint
+            bp_source = self.expect_not_none(source_bp.source)
+            self.assertEqual(bp_source.name, main_basename, "incorrect source name")
+            self.assertEqual(bp_source.path, main_path, "incorrect source path")
+
+            source_bp_id = self.expect_not_none(source_bp.id)
+
+        # Run to the source breakpoint; the stack frame should also report
+        # the renamed source.
         stop_event = session.verify_stopped_on_breakpoint(
-            other_breakpoint_id, after=ctx.process_event
+            source_bp_id, after=ctx.process_event
         )
-
-        # now we check the stack trace making sure that we got mapped source paths
-        thread_ctx = session.thread_context_from(stop_event)
-        top_frame_ctx = thread_ctx.top_frame()
+        top_frame_ctx = session.top_frame_from(stop_event)
         top_frame = top_frame_ctx.frame
 
         frame_source = self.expect_not_none(top_frame.source)
-        self.assertEqual(frame_source.name, self.main_basename, "incorrect source name")
-        self.assertEqual(
-            frame_source.path, self.main_path, "incorrect source file path"
-        )
+        self.assertEqual(frame_source.name, main_basename, "incorrect source name")
+        self.assertEqual(frame_source.path, main_path, "incorrect source path")
 
-        # Check disassembly view
-        disassembled_instructions = top_frame_ctx.disassemble()
-        first_instruction = disassembled_instructions[0]
+        # Disassemble at the current PC; use the address of the following
+        # instruction as an instruction breakpoint target.
+        disasm = top_frame_ctx.disassemble()
+        current_inst, next_inst = disasm[0], disasm[1]
+
         self.assertEqual(
-            first_instruction.address,
+            current_inst.address,
             top_frame.instructionPointerReference,
-            "current breakpoint reference is not in the disassembly view",
+            "disassembly does not begin at the current instruction",
         )
+        self.assertGreater(len(next_inst.address), 2)
+        self.assertNotEqual(next_inst.presentationHint, "invalid")
 
-        # Get next instruction address to set instruction breakpoint
-        next_instruction = disassembled_instructions[1]
-        next_address = next_instruction.address
-
-        self.assertGreater(len(next_address), 2)
-        self.assertNotEqual(next_instruction.presentationHint, "invalid")
-
-        bp_response = session.set_instruction_breakpoints([next_address])
-        inst_breakpoint, *_ = bp_response.body.breakpoints
-
+        bp_response = session.set_instruction_breakpoints([next_inst.address])
+        [inst_bp] = bp_response.body.breakpoints
         self.assertEqual(
-            inst_breakpoint.instructionReference,
-            next_address,
-            "Instruction breakpoint has not been resolved or failed to relocate the instruction breakpoint",
+            inst_bp.instructionReference,
+            next_inst.address,
+            "instruction breakpoint was not resolved to the expected address",
         )
 
-        inst_breakpoint_id = self.expect_not_none(inst_breakpoint.id)
-        session.continue_to_breakpoint(inst_breakpoint_id)
+        inst_bp_id = self.expect_not_none(inst_bp.id)
+        session.continue_to_breakpoint(inst_bp_id)
 
-        # Clear breakpoints that are set.
-        session.set_source_breakpoints(self.main_path, [])
+        session.set_source_breakpoints(main_path, [])
         session.set_instruction_breakpoints([])
-
-        session.continue_to_exit(3)
+        session.continue_to_exit(exitCode=3)

@@ -4,8 +4,8 @@ Test lldb-dap dataBreakpointInfo and setDataBreakpoints requests
 
 from lldbsuite.test.decorators import skipIfWindows
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import DataBreakpoint, LaunchArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import DataBreakpoint, LaunchArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 class TestDAP_setDataBreakpoints(DAPTestCaseBase):
@@ -66,9 +66,7 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
 
         thread_ctx = session.thread_context_from(stop_event)
         top_frame_ctx = thread_ctx.top_frame()
-        # TODO: simplify this to (get_local_variable("arr").get_child("[2]"))
-        arr = top_frame_ctx.locals["arr"]
-        arr_2 = arr["[2]"]
+        arr_2 = top_frame_ctx.locals["arr"]["[2]"]
         i_val = top_frame_ctx.locals["i"]
         self.assertEqual(arr_2.value, "42")
         self.assertEqual(i_val.value, "2")
@@ -128,16 +126,13 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
 
         thread_ctx = session.thread_context_from(stop_event)
         top_frame_ctx = thread_ctx.top_frame()
-        # TODO: simplify this to (get_local_variable("arr").get_child("[2]"))
-        arr = top_frame_ctx.locals["arr"]
-        arr_2 = arr["[2]"]
+        arr_2 = top_frame_ctx.locals["arr"]["[2]"]
         i_val = top_frame_ctx.locals["i"]
         self.assertEqual(arr_2.value, "42")
         self.assertEqual(i_val.value, "2")
         session.set_data_breakpoints([])
         session.continue_to_exit()
 
-    # TODO: renable windows
     @skipIfWindows
     def test_functionality(self):
         """Tests setting data breakpoints on variable."""
@@ -193,7 +188,6 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
 
         thread_ctx = session.thread_context_from(stop_event)
         top_frame_ctx = thread_ctx.top_frame()
-        # TODO: simplify this to (get_local_variable("arr").get_child("[2]"))
         arr_2 = top_frame_ctx.locals["arr"]["[2]"]
         i_val = top_frame_ctx.locals["i"]
         self.assertEqual(arr_2.value, "42")
@@ -222,7 +216,7 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
         x_var = top_frame_ctx.locals["x"]
         self.assertEqual(x_var.value, "3")
 
-        # Test condition
+        # Test condition.
         data_breakpoints = [
             DataBreakpoint(dataId=x_data_id, accessType="write", condition="x==10")
         ]
@@ -250,7 +244,7 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
         process_event = ctx.process_event
         stop_event = session.verify_stopped_on_breakpoint(after=process_event)
 
-        # Test write watchpoints on x, arr[2]
+        # Test write watchpoints on x, arr[2].
         thread_ctx = session.thread_context_from(stop_event)
         top_frame_ctx = thread_ctx.top_frame()
         x = top_frame_ctx.locals["x"]
@@ -295,9 +289,7 @@ class TestDAP_setDataBreakpoints(DAPTestCaseBase):
 
         thread_ctx = session.thread_context_from(stop_event)
         top_frame_ctx = thread_ctx.top_frame()
-        # TODO: simplify this to (get_local_variable("arr").get_child("[2]"))
-        arr = top_frame_ctx.locals["arr"]
-        arr_2 = arr["[2]"]
+        arr_2 = top_frame_ctx.locals["arr"]["[2]"]
         i_val = top_frame_ctx.locals["i"]
         self.assertEqual(arr_2.value, "42")
         self.assertEqual(i_val.value, "2")

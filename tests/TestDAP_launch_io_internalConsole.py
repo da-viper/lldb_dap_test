@@ -3,7 +3,8 @@ Test the redirection after launching in the internal console.
 """
 
 from lldbsuite.test.decorators import skipIfWindows
-from lldbsuite.test.tools.lldb_dap.dap_types import Console
+from lldbsuite.test.tools.lldb_dap import DAPTestSession
+from lldbsuite.test.tools.lldb_dap.types import Console
 
 
 try:
@@ -27,9 +28,9 @@ class TestDAP_launch_io_InternalConsole(DAP_launchIO):
     def test_stderr_redirection(self):
         self.stderr_redirection(console=self.console)
 
-    def _get_debuggee_stdout(self) -> str:
-        return self._session.get_stdout()
+    def _get_debuggee_stdout(self, session: DAPTestSession) -> str:
+        return session.get_stdout()
 
-    def _get_debuggee_stderr(self) -> str:
+    def _get_debuggee_stderr(self, session: DAPTestSession) -> str:
         # NOTE: In internalConsole stderr writes to stdout.
-        return self._get_debuggee_stdout()
+        return self._get_debuggee_stdout(session)

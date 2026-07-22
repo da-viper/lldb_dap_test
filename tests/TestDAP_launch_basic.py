@@ -1,5 +1,5 @@
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 class TestDAP_launch_basic(DAPTestCaseBase):
@@ -36,7 +36,7 @@ int main(int argc, char const *argv[], char const *envp[]) {
         session.launch(LaunchArgs(program=program))
         session.verify_process_exited()
 
-        # Now get the STDOUT and verify our program argument is correct
+        # Now get the STDOUT and verify our program argument is correct.
         output = session.get_stdout()
         self.assertTrue(output and len(output) > 0, "expect program output")
         lines = output.splitlines()

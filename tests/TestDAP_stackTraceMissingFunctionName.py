@@ -3,11 +3,11 @@ Test lldb-dap stack trace response
 """
 
 from lldbsuite.test.decorators import skipIfWindows
-from lldbsuite.test.tools.lldb_dap import lldb_dap_testcase
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs, StoppedReason
+from lldbsuite.test.tools.lldb_dap import testcase
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs, StoppedReason
 
 
-class TestDAP_stackTraceMissingFunctionName(lldb_dap_testcase.DAPTestCaseBase):
+class TestDAP_stackTraceMissingFunctionName(testcase.DAPTestCaseBase):
     TEST_PROGRAM = r"""int main() {
   typedef void (*FooCallback)();
   FooCallback foo_callback = (FooCallback)0;

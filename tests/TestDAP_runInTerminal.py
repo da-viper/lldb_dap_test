@@ -8,18 +8,17 @@ import json
 import os
 import subprocess
 import sys
-from contextlib import contextmanager
-from typing import Iterator, cast
+from typing import cast
 
 from lldbsuite.test.decorators import skipIfAsan, skipIfBuildType, skipIfWindows
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import (
+from lldbsuite.test.tools.lldb_dap.types import (
     Console,
     ErrorResponse,
     LaunchArgs,
     RunInTerminalRequest,
 )
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 if sys.platform == "win32":
     import ctypes
@@ -94,6 +93,12 @@ if sys.platform == "win32":
             kernel32.DisconnectNamedPipe(self._pipe)
             kernel32.CloseHandle(self._pipe)
 
+        def __enter__(self):
+            pass
+
+        def __exit__(self, *_):
+            self.close()
+
 else:
 
     class FifoComm:
@@ -123,15 +128,11 @@ else:
         def close(self) -> None:
             pass
 
+        def __enter__(self):
+            return self
 
-@contextmanager
-def fifo_comm(directory: str) -> Iterator[FifoComm]:
-    """Open a `FifoComm` appropriate for the current platform."""
-    comm = FifoComm.create(directory)
-    try:
-        yield comm
-    finally:
-        comm.close()
+        def __exit__(self, *_):
+            self.close()
 
 
 _TEST_PROGRAM = r"""
@@ -265,10 +266,10 @@ class TestDAP_runInTerminal(DAPTestCaseBase):
         self.assertIn("Client does not support RunInTerminal.", error.format)
 
 
-
-# TODO: Separate Tests that exercise `lldb-dap --launch-target` directly. 
+# TODO: Separate Tests that exercise `lldb-dap --launch-target` directly.
 # So the entire test do not use the USE_DEFAULT_DEBUG_ADAPTER.
 # These tests do not need a debug adapter  they just spawn the binary and talk to it through
+
 
 @skipIfBuildType(["debug"])
 @skipIfWindows  # https://github.com/llvm/llvm-project/issues/198763
@@ -277,7 +278,7 @@ class TestDAP_runInTerminalLauncher(DAPTestCaseBase):
     USE_DEFAULT_DEBUG_ADAPTER = False
     NO_DEBUG_INFO_TESTCASE = True
 
-    def _send_did_attach(self, comm: FifoComm) -> None:
+    def send_did_attach(self, comm: FifoComm) -> None:
         comm.write_message(json.dumps({"kind": "didAttach"}) + "\n")
 
     def test_missingArgInRunInTerminalLauncher(self):
@@ -294,7 +295,7 @@ class TestDAP_runInTerminalLauncher(DAPTestCaseBase):
         )
 
     def test_FakeAttachedRunInTerminalLauncherWithInvalidProgram(self):
-        with fifo_comm(self.getBuildDir()) as comm:
+        with FifoComm.create(self.getBuildDir()) as comm:
             proc = subprocess.Popen(
                 [
                     self.lldbDAPExec,
@@ -311,7 +312,7 @@ class TestDAP_runInTerminalLauncher(DAPTestCaseBase):
                 self.assertIn("Failed to launch target process", stderr)
             else:
                 self.assertIn("pid", comm.read_message())
-                self._send_did_attach(comm)
+                self.send_did_attach(comm)
                 self.assertIn(
                     "No such file or directory",
                     comm.read_message(),
@@ -321,7 +322,7 @@ class TestDAP_runInTerminalLauncher(DAPTestCaseBase):
                 self.assertIn("No such file or directory", stderr)
 
     def test_FakeAttachedRunInTerminalLauncherWithValidProgram(self):
-        with fifo_comm(self.getBuildDir()) as comm:
+        with FifoComm.create(self.getBuildDir()) as comm:
             proc = subprocess.Popen(
                 [
                     self.lldbDAPExec,
@@ -336,14 +337,14 @@ class TestDAP_runInTerminalLauncher(DAPTestCaseBase):
             )
 
             self.assertIn("pid", comm.read_message())
-            self._send_did_attach(comm)
+            self.send_did_attach(comm)
 
             stdout, _ = proc.communicate()
 
         self.assertIn("foo", stdout)
 
     def test_FakeAttachedRunInTerminalLauncherAndCheckEnvironment(self):
-        with fifo_comm(self.getBuildDir()) as comm:
+        with FifoComm.create(self.getBuildDir()) as comm:
             proc = subprocess.Popen(
                 [
                     self.lldbDAPExec,
@@ -358,7 +359,7 @@ class TestDAP_runInTerminalLauncher(DAPTestCaseBase):
             )
 
             self.assertIn("pid", comm.read_message())
-            self._send_did_attach(comm)
+            self.send_did_attach(comm)
 
             stdout, _ = proc.communicate()
 
@@ -366,7 +367,7 @@ class TestDAP_runInTerminalLauncher(DAPTestCaseBase):
 
     def test_NonAttachedRunInTerminalLauncher(self):
         """Without a didAttach acknowledgement the launcher times out."""
-        with fifo_comm(self.getBuildDir()) as comm:
+        with FifoComm.create(self.getBuildDir()) as comm:
             proc = subprocess.Popen(
                 [
                     self.lldbDAPExec,

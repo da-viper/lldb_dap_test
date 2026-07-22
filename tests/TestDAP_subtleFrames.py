@@ -5,11 +5,11 @@ Test lldb-dap stack trace response
 
 from lldbsuite.test.decorators import add_test_categories
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap import lldb_dap_testcase
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs, StackTraceArgs
+from lldbsuite.test.tools.lldb_dap import testcase
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs, StackTraceArgs
 
 
-class TestDAP_subtleFrames(lldb_dap_testcase.DAPTestCaseBase):
+class TestDAP_subtleFrames(testcase.DAPTestCaseBase):
     TEST_PROGRAM = r"""
 #include <functional>
 #include <iostream>

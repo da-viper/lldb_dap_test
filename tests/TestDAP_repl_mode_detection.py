@@ -5,12 +5,12 @@ Test lldb-dap repl mode detection
 from typing import Optional
 
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import (
+from lldbsuite.test.tools.lldb_dap.types import (
     LaunchArgs,
     StackTraceArgs,
     StoppedEvent,
 )
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 class TestDAP_repl_mode_detection(DAPTestCaseBase):
@@ -40,9 +40,8 @@ int main() {
     def get_frame_id_from_event(self, stopped_event: StoppedEvent):
         thread_id = self.expect_not_none(stopped_event.body.threadId)
 
-        all_frames = self._session.send_request(
-            StackTraceArgs(thread_id)
-        ).result().body.stackFrames
+        response = self._session.send_request(StackTraceArgs(thread_id)).result()
+        all_frames = response.body.stackFrames
 
         self.assertGreaterEqual(len(all_frames), 1, "Expected at least one frame.")
         return all_frames[0].id

@@ -1,6 +1,9 @@
+"""Test that lldb-dap keeps stdout/stderr redirection working even when the
+inferior's output is routed back through the debug console."""
+
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 from lldbsuite.test.tools.lldb_dap.utils import DebugAdapterOptions
 
 
@@ -18,7 +21,7 @@ int main(int argc, char const *argv[]) {
 
 """
 
-    def build(self):
+    def build(self, dictionary=None):
         self.create_test_program_with_name("main.cpp")
 
     def test(self):
@@ -41,14 +44,10 @@ int main(int argc, char const *argv[]) {
         source = "main.cpp"
         breakpoint1_line = line_number(source, "// breakpoint 1")
         with session.configure(LaunchArgs(program)) as ctx:
-            breakpoint_ids = session.resolve_source_breakpoints(
-                source, [breakpoint1_line]
-            )
-        stop_event = session.verify_stopped_on_breakpoint(
-            breakpoint_ids, after=ctx.process_event
-        )
+            bp_ids = session.resolve_source_breakpoints(source, [breakpoint1_line])
+        stop_event = session.verify_stopped_on_breakpoint(bp_ids, after=ctx.process_event)
 
         thread_ctx = session.thread_context_from(stop_event)
-        local_variables = thread_ctx.frames()[1].locals
-        local_names = [var.name for var in local_variables]
+        local_vars = thread_ctx.frames()[1].locals.variables()
+        local_names = [var.name for var in local_vars]
         self.assertIn("argc", local_names)

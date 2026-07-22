@@ -6,13 +6,13 @@ import re
 from typing import List, Optional, Union
 
 from lldbsuite.test.decorators import skipIfWindows
-from lldbsuite.test.tools.lldb_dap.dap_types import (
+from lldbsuite.test.tools.lldb_dap.types import (
     LaunchArgs,
     ProgressEndEvent,
     ProgressStartEvent,
     ProgressUpdateEvent,
 )
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 from lldbsuite.test.tools.lldb_dap.session_helpers import DAPTestSession
 
 _ProgressEvent = Union[ProgressStartEvent, ProgressUpdateEvent, ProgressEndEvent]

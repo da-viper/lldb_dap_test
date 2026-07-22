@@ -9,12 +9,14 @@ from typing import Dict
 
 from lldbsuite.test.decorators import skipIfWindows
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import (
+from lldbsuite.test.tools.lldb_dap.types import (
     DAPTestGetTargetBreakpointsArgs,
     LaunchArgs,
+    SetBreakpointsArgs,
+    Source,
     SourceBreakpoint,
 )
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 class TestDAP_setBreakpoints(DAPTestCaseBase):
@@ -83,7 +85,7 @@ int main(int argc, char const *argv[]) {
         self.main_basename = "main-copy.cpp"
         self.main_path = os.path.realpath(self.getBuildArtifact(self.main_basename))
 
-    def build(self):
+    def build(self, filename=None):
         # TODO: START -- this is not needed when we port
         main_cpp = self.create_file(self.TEST_PROGRAM, "main.cpp")
         other_c = self.create_file(self.OTHER_C, "other.c")
@@ -138,7 +140,7 @@ int main(int argc, char const *argv[]) {
         new_main_path = os.path.join(new_main_folder, self.main_basename)
         new_other_path = os.path.join(new_other_folder, other_basename)
 
-        # move the sources
+        # Move the sources.
         os.mkdir(new_main_folder)
         os.mkdir(new_other_folder)
         shutil.move(self.main_path, new_main_path)
@@ -152,54 +154,42 @@ int main(int argc, char const *argv[]) {
             (source_folder, new_main_folder),
             (source_folder, new_other_folder),
         ]
-        session = session
-        launch_handle = session.initialize_and_launch(
-            LaunchArgs(program, sourceMap=source_map)
-        )
-        session.ensure_initialized()
+        with session.configure(LaunchArgs(program, sourceMap=source_map)) as ctx:
+            # Breakpoint in main.cpp.
+            response = session.set_source_breakpoints(new_main_path, [main_line])
+            self.assertEqual(len(response.body.breakpoints), 1)
+            [main_bp] = response.body.breakpoints
+            self.assertEqual(main_bp.line, main_line)
+            self.assertTrue(main_bp.verified)
+            breakpoint_source = self.expect_not_none(main_bp.source)
+            self.assertEqual(self.main_basename, breakpoint_source.name)
+            self.assertEqual(new_main_path, breakpoint_source.path)
 
-        # breakpoint in main.cpp
-        response = session.set_source_breakpoints(new_main_path, [main_line])
+            # 2nd breakpoint, which is from a dynamically loaded library.
+            response = session.set_source_breakpoints(new_other_path, [other_line])
+            [other_bp] = response.body.breakpoints
+            self.assertEqual(other_bp.line, other_line)
+            self.assertFalse(other_bp.verified)
+            breakpoint_source = self.expect_not_none(other_bp.source)
+            self.assertEqual(other_basename, breakpoint_source.name)
+            self.assertEqual(new_other_path, breakpoint_source.path)
+            other_bp_id = self.expect_not_none(other_bp.id)
 
-        breakpoints = response.body.breakpoints
-        self.assertEqual(len(breakpoints), 1)
-        breakpoint = breakpoints[0]
-        self.assertEqual(breakpoint.line, main_line)
-        self.assertTrue(breakpoint.verified)
-        breakpoint_source = self.expect_not_none(breakpoint.source)
-        self.assertEqual(self.main_basename, breakpoint_source.name)
-        self.assertEqual(new_main_path, breakpoint_source.path)
-
-        # 2nd breakpoint, which is from a dynamically loaded library
-        response = session.set_source_breakpoints(new_other_path, [other_line])
-        breakpoints = response.body.breakpoints
-        breakpoint = breakpoints[0]
-        self.assertEqual(breakpoint.line, other_line)
-        self.assertFalse(breakpoint.verified)
-        breakpoint_source = self.expect_not_none(breakpoint.source)
-        self.assertEqual(other_basename, breakpoint_source.name)
-        self.assertEqual(new_other_path, breakpoint_source.path)
-        other_breakpoint_id = self.expect_not_none(breakpoint.id)
-
-        session.verify_configuration_done()
-        launch_handle.result()
-        stop_event = session.wait_until_any_breakpoint_hit(
-            [other_breakpoint_id], after=response
+        stop_event = session.verify_stopped_on_breakpoint(
+            other_bp_id, after=ctx.process_event
         )
 
-        # 2nd breakpoint again, which should be valid at this point
+        # 2nd breakpoint again, which should be valid at this point.
         response = session.set_source_breakpoints(new_other_path, [other_line])
-        breakpoints = response.body.breakpoints
-        breakpoint = breakpoints[0]
-        self.assertEqual(breakpoint.line, other_line)
-        self.assertTrue(breakpoint.verified)
-        breakpoint_source = self.expect_not_none(breakpoint.source)
+        [other_bp] = response.body.breakpoints
+        self.assertEqual(other_bp.line, other_line)
+        self.assertTrue(other_bp.verified)
+        breakpoint_source = self.expect_not_none(other_bp.source)
         self.assertEqual(other_basename, breakpoint_source.name)
         self.assertEqual(new_other_path, breakpoint_source.path)
 
-        # now we check the stack trace making sure that we got mapped source paths
-        thread_ctx = session.thread_context_from(stop_event)
-        frame_ctxs = thread_ctx.frames()
+        # Now we check the stack trace making sure that we got mapped source paths.
+        frame_ctxs = session.thread_context_from(stop_event).frames()
         frames = [ctx.frame for ctx in frame_ctxs]
 
         frame0_source = self.expect_not_none(frames[0].source)
@@ -210,7 +200,7 @@ int main(int argc, char const *argv[]) {
         self.assertEqual(frame1_source.name, self.main_basename)
         self.assertEqual(frame1_source.path, new_main_path)
 
-        # clear breakpoints
+        # Clear all breakpoints.
         session.set_source_breakpoints(new_main_path, [])
         session.set_source_breakpoints(new_other_path, [])
         session.continue_to_exit()
@@ -241,7 +231,7 @@ int main(int argc, char const *argv[]) {
         program = self.getBuildArtifact("a.out")
         session.initialize_and_launch(LaunchArgs(program))
 
-        # Set 3 breakpoints and verify that they got set correctly
+        # Set 3 breakpoints and verify that they got set correctly.
         response = session.set_source_breakpoints(self.main_path, lines)
         breakpoints = response.body.breakpoints
         self.assertEqual(
@@ -253,7 +243,7 @@ int main(int argc, char const *argv[]) {
         for index, breakpoint in enumerate(breakpoints):
             line = self.expect_not_none(breakpoint.line)
             self.assertEqual(line, lines[index])
-            # Store the "id" of the breakpoint that was set for later
+            # Store the "id" of the breakpoint that was set for later.
             breakpoint_id = self.expect_not_none(breakpoint.id)
             line_to_id[line] = breakpoint_id
             self.assertTrue(breakpoint.verified, "expect breakpoint verified")
@@ -309,7 +299,7 @@ int main(int argc, char const *argv[]) {
             self.assertTrue(breakpoint.verified, "expect breakpoint still verified")
 
         # Now clear all breakpoints for the source file by passing down an
-        # empty lines array
+        # empty lines array.
         lines = []
         response = session.set_source_breakpoints(self.main_path, lines)
         breakpoints = response.body.breakpoints
@@ -346,7 +336,7 @@ int main(int argc, char const *argv[]) {
         # Now get the full list of breakpoints set in the target and verify
         # we have only 2 breakpoints set. The response above could have told
         # us about 2 breakpoints, but we want to make sure we don't have the
-        # third one still set in the target
+        # third one still set in the target.
         response = session.send_request(DAPTestGetTargetBreakpointsArgs()).result()
         breakpoints = response.body.breakpoints
         self.assertEqual(
@@ -374,38 +364,31 @@ int main(int argc, char const *argv[]) {
         # without launching or attaching to a process, so we must start a
         # process in order to be able to set breakpoints.
         program = self.getBuildArtifact("a.out")
-        launch_handle = session.initialize_and_launch(LaunchArgs(program))
-        session.ensure_initialized()
+        with session.configure(LaunchArgs(program)):
+            # Set one breakpoint and verify that it got set correctly.
+            response = session.set_source_breakpoints(self.main_path, lines)
+            breakpoints = response.body.breakpoints
+            self.assertEqual(
+                len(breakpoints), len(lines), f"expect {len(lines)} source breakpoints"
+            )
+            for expected_line, breakpoint in zip(lines, breakpoints):
+                line = self.expect_not_none(breakpoint.line)
+                self.assertEqual(line, expected_line)
+                self.expect_not_none(breakpoint.id)
+                self.assertTrue(breakpoint.verified, "expect breakpoint verified")
 
-        # Set one breakpoint and verify that it got set correctly.
-        response = session.set_source_breakpoints(self.main_path, lines)
-        breakpoints = response.body.breakpoints
-        self.assertEqual(
-            len(breakpoints), len(lines), f"expect {len(lines)} source breakpoints"
-        )
-        line_to_id = {}
-        for index, breakpoint in enumerate(breakpoints):
-            line = self.expect_not_none(breakpoint.line)
-            self.assertEqual(line, lines[index])
-            # Store the "id" of the breakpoint that was set for later
-            breakpoint_id = self.expect_not_none(breakpoint.id)
-            line_to_id[line] = breakpoint_id
-            self.assertTrue(breakpoint.verified, "expect breakpoint verified")
+            # Now clear all breakpoints for the source file by not setting the
+            # lines or breakpoints array.
+            set_bp_args = SetBreakpointsArgs(Source.create(path=self.main_path))
+            response = session.send_request(set_bp_args).result()
+            breakpoints = response.body.breakpoints
+            self.assertEqual(len(breakpoints), 0, "expect no source breakpoints")
 
-        # Now clear all breakpoints for the source file by not setting the
-        # lines array.
-        lines = []
-        response = session.set_source_breakpoints(self.main_path, lines)
-        breakpoints = response.body.breakpoints
-        self.assertEqual(len(breakpoints), 0, "expect no source breakpoints")
+            # Verify with the target that all breakpoints have been cleared.
+            response = session.send_request(DAPTestGetTargetBreakpointsArgs()).result()
+            breakpoints = response.body.breakpoints
+            self.assertEqual(len(breakpoints), 0, "expect no source breakpoints")
 
-        # Verify with the target that all breakpoints have been cleared.
-        response = session.send_request(DAPTestGetTargetBreakpointsArgs()).result()
-        breakpoints = response.body.breakpoints
-        self.assertEqual(len(breakpoints), 0, "expect no source breakpoints")
-
-        session.verify_configuration_done()
-        launch_handle.result()
         session.verify_process_exited()
 
     @skipIfWindows
@@ -417,61 +400,59 @@ int main(int argc, char const *argv[]) {
 
         program = self.getBuildArtifact("a.out")
 
-        # Set a breakpoint at the loop line with no condition and no
-        # hitCondition
         with session.configure(LaunchArgs(program)) as ctx:
-            session.resolve_source_breakpoints(self.main_path, [loop_line])
+            # Set a breakpoint at the loop line with no condition and no
+            # hitCondition.
+            [loop_bp] = session.resolve_source_breakpoints(self.main_path, [loop_line])
         process_event = ctx.process_event
-        # Verify we hit the breakpoint we just set
-        stop_event = session.verify_stopped_on_breakpoint(after=process_event)
-        breakpoint_ids = self.expect_not_none(stop_event.body.hitBreakpointIds)
 
-        # Make sure i is zero at first breakpoint
+        # Verify we hit the breakpoint we just set.
+        stop_event = session.verify_stopped_on_breakpoint(loop_bp, after=process_event)
+
+        # Make sure i is zero at first breakpoint.
         thread_ctx = session.thread_context_from(stop_event)
         i_var = thread_ctx.top_frame().locals["i"]
         self.assertEqual(i_var.value_as_int, 0, "i != 0 after hitting breakpoint")
 
-        # Update the condition on our breakpoint
-        new_breakpoint_ids = session.resolve_source_breakpoints(
+        # Update the condition on our breakpoint.
+        [condition_bp] = session.resolve_source_breakpoints(
             self.main_path, [SourceBreakpoint(loop_line, condition="i==4")]
         )
         self.assertEqual(
-            breakpoint_ids,
-            new_breakpoint_ids,
-            "existing breakpoint should have its condition " "updated",
+            loop_bp,
+            condition_bp,
+            "existing breakpoint should have its condition updated",
         )
 
-        stop_event = session.continue_to_any_breakpoint(breakpoint_ids)
+        stop_event = session.continue_to_breakpoint(loop_bp)
         thread_ctx = session.thread_context_from(stop_event)
         i_var = thread_ctx.top_frame().locals["i"]
         self.assertEqual(i_var.value_as_int, 4, "i != 4 showing conditional works")
 
-        new_breakpoint_ids = session.resolve_source_breakpoints(
+        # Update the hitCondition on our breakpoint.
+        [hit_condition_bp] = session.resolve_source_breakpoints(
             self.main_path, [SourceBreakpoint(loop_line, hitCondition="2")]
         )
-
         self.assertEqual(
-            breakpoint_ids,
-            new_breakpoint_ids,
-            "existing breakpoint should have its condition " "updated",
+            loop_bp,
+            hit_condition_bp,
+            "existing breakpoint should have its condition updated",
         )
 
-        # Continue with a hitCondition of 2 and expect it to skip 1 value
-        stop_event = session.continue_to_any_breakpoint(breakpoint_ids)
-        thread_ctx = session.thread_context_from(stop_event)
+        # Continue with a hitCondition of 2 and expect it to skip 1 value.
+        stop_event = session.continue_to_breakpoint(loop_bp)
         i_var = thread_ctx.top_frame().locals["i"]
         self.assertEqual(i_var.value_as_int, 6, "i != 6 showing hitCondition works")
 
-        # continue after hitting our hitCondition and make sure it only goes
-        # up by 1
-        stop_event = session.continue_to_any_breakpoint(breakpoint_ids)
-        thread_ctx = session.thread_context_from(stop_event)
+        # Continue after hitting our hitCondition and make sure it only goes
+        # up by 1.
+        stop_event = session.continue_to_breakpoint(loop_bp)
         i_var = thread_ctx.top_frame().locals["i"]
         self.assertEqual(
             i_var.value_as_int, 7, "i != 7 showing post hitCondition hits every time"
         )
 
-        # clear breakpoints and exit.
+        # Clear breakpoints and exit.
         session.set_source_breakpoints(self.main_path, [])
         session.continue_to_exit()
 
@@ -482,52 +463,48 @@ int main(int argc, char const *argv[]) {
         loop_line = line_number("main.cpp", "// break loop")
 
         program = self.getBuildArtifact("a.out")
-        launch_handle = session.initialize_and_launch(LaunchArgs(program))
-        session.ensure_initialized()
+        with session.configure(LaunchArgs(program)):
+            # Set two breakpoints on the loop line at different columns.
+            columns = [13, 39]
+            source_bps = [
+                SourceBreakpoint(line=loop_line, column=column) for column in columns
+            ]
+            response = session.set_source_breakpoints(self.main_path, source_bps)
 
-        # Set two breakpoints on the loop line at different columns.
-        columns = [13, 39]
-        source_bps = [
-            SourceBreakpoint(line=loop_line, column=column) for column in columns
-        ]
-        response = session.set_source_breakpoints(self.main_path, source_bps)
-
-        # Verify the breakpoints were set correctly
-        breakpoints = response.body.breakpoints
-        self.assertEqual(
-            len(breakpoints),
-            len(columns),
-            f"expect {len(columns)} source breakpoints",
-        )
-        breakpoint_ids: list[int] = []
-        for column, breakpoint in zip(columns, breakpoints):
-            self.assertEqual(breakpoint.line, loop_line)
-            self.assertEqual(breakpoint.column, column)
-            self.assertTrue(breakpoint.verified, "expect breakpoint verified")
-            breakpoint_id = self.expect_not_none(breakpoint.id)
-            breakpoint_ids.append(breakpoint_id)
+            # Verify the breakpoints were set correctly.
+            breakpoints = response.body.breakpoints
+            self.assertEqual(
+                len(breakpoints),
+                len(columns),
+                f"expect {len(columns)} source breakpoints",
+            )
+            breakpoint_ids: list[int] = []
+            for column, breakpoint in zip(columns, breakpoints):
+                self.assertEqual(breakpoint.line, loop_line)
+                self.assertEqual(breakpoint.column, column)
+                self.assertTrue(breakpoint.verified, "expect breakpoint verified")
+                breakpoint_id = self.expect_not_none(breakpoint.id)
+                breakpoint_ids.append(breakpoint_id)
 
         # Continue to the first breakpoint,
-        session.verify_configuration_done()
-        launch_handle.result()
-        stop_event = session.wait_until_any_breakpoint_hit(
-            [breakpoint_ids[0]], after=response
+        stop_event = session.verify_stopped_on_breakpoint(
+            breakpoint_ids[0], after=response
         )
 
         # We should have stopped right before the call to `twelve`.
         # Step into and check we are inside `twelve`.
         thread_ctx = session.thread_context_from(stop_event)
         thread_ctx.step_in()
-        func_name = thread_ctx.top_frame().frame.name
+        func_name = thread_ctx.top_frame().name
         self.assertEqual(func_name, "twelve(int)")
 
         # Continue to the second breakpoint.
-        stop_event = session.continue_to_any_breakpoint([breakpoint_ids[1]])
+        stop_event = session.continue_to_breakpoint(breakpoint_ids[1])
 
         # We should have stopped right before the call to `fourteen`.
         # Step into and check we are inside `fourteen`.
         thread_ctx.step_in()
-        func_name = thread_ctx.top_frame().frame.name
+        func_name = thread_ctx.top_frame().name
         self.assertEqual(func_name, "a::fourteen(int)")
 
         session.set_source_breakpoints(self.main_path, [])
@@ -550,8 +527,7 @@ int main(int argc, char const *argv[]) {
                 self.main_path, breakpoint_lines
             )
 
-        # Verify we hit both of the breakpoints we just set
-        process_event = ctx.process_event
-        session.verify_multiple_breakpoints_hit(breakpoint_ids, after=process_event)
+        # Verify we hit both of the breakpoints we just set.
+        session.verify_multiple_breakpoints_hit(breakpoint_ids, after=ctx.process_event)
 
         session.continue_to_exit()

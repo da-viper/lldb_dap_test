@@ -9,8 +9,8 @@ from typing import List, Tuple
 
 from lldbsuite.test.decorators import skipIfWindows
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import BreakpointLocation, LaunchArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import BreakpointLocation, LaunchArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 class TestDAP_breakpointLocations(DAPTestCaseBase):
@@ -116,7 +116,7 @@ int main(int argc, char const *argv[]) {
 
         # Ask for the breakpoint locations based only on the line number.
         loop_line = line_number(main_path, "// break loop")
-        response = session.set_breakpoint_locations(main_path, loop_line)
+        response = session.get_breakpoint_locations(main_path, loop_line)
         breakpoint_locations = response.body.breakpoints
 
         expected_columns = [9, 13, 20, 23, 25, 34, 37, 39, 51]
@@ -127,7 +127,7 @@ int main(int argc, char const *argv[]) {
         self.assertEqual(breakpoint_locations, expected_locations)
 
         # Ask for the breakpoint locations for a column range.
-        response = session.set_breakpoint_locations(
+        response = session.get_breakpoint_locations(
             main_path, loop_line, column=24, endColumn=46
         )
         breakpoint_locations = response.body.breakpoints
@@ -139,7 +139,7 @@ int main(int argc, char const *argv[]) {
         self.assertEqual(breakpoint_locations, expected_locations)
 
         # Ask for the breakpoint locations for a range of line numbers.
-        response = session.set_breakpoint_locations(
+        response = session.get_breakpoint_locations(
             main_path, line=loop_line, column=39, endLine=loop_line + 2
         )
         self.maxDiff = None

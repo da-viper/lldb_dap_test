@@ -11,8 +11,8 @@ from lldbsuite.test.decorators import (
     skipIfWindows,
 )
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 @skipIfTargetDoesNotSupportSharedLibraries()
@@ -100,8 +100,7 @@ int main(int argc, char const *argv[]) {
         main_bp_line = line_number(source, "// main breakpoint 1")
 
         with session.configure(LaunchArgs(program=program)) as ctx:
-            # Function breakpoint on `foo` (in libfoo) — resolves only when
-            # the dylib loads. Source breakpoint on main resolves immediately.
+            # This breakpoint will be resolved only when the libfoo module is loaded.
             func_response = session.set_function_breakpoints(["foo"])
             breakpoints = func_response.body.breakpoints
             breakpoints.extend(
@@ -114,7 +113,7 @@ int main(int argc, char const *argv[]) {
         )
         session.continue_to_exit()
 
-        terminated = session.wait_for_terminated(after=last_bp_event)
+        terminated = session.wait_for_terminated_event(after=last_bp_event)
         body = self.expect_not_none(terminated.body)
         statistics = body.lldb_statistics
 

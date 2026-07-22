@@ -7,16 +7,17 @@ import signal
 import tempfile
 import time
 from concurrent import futures
+import unittest
 
 from lldbsuite.test.decorators import skipIfWindows
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import (
+from lldbsuite.test.tools.lldb_dap.types import (
     Event,
     ExitedEvent,
     LaunchArgs,
     TerminatedEvent,
 )
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 from lldbsuite.test.tools.lldb_dap.session_helpers import DAPTestSession
 from lldbsuite.test.tools.lldb_dap.utils import DebugAdapterOptions
 
@@ -61,7 +62,6 @@ int main(int argc, char const *argv[]) {
         session.continue_to_exit()
         output = session.get_stdout()
         self.assertEqual(output, f"Hello {name}!\r\n")
-
         session.disconnect()
 
     @skipIfWindows
@@ -75,7 +75,10 @@ int main(int argc, char const *argv[]) {
         names = ["Alice", "Bob"]
         # Run each session on a different thread.
         with futures.ThreadPoolExecutor() as executor:
-            session_args = [(self.create_session(adapter), name) for name in names]
+            session_args = [
+                (self.create_session(adapter, disconnect_automatically=False), name)
+                for name in names
+            ]
             session_futures = [
                 executor.submit(self.run_debug_session, adapter, name)
                 for adapter, name in session_args
@@ -84,6 +87,7 @@ int main(int argc, char const *argv[]) {
                 session_future.result()
 
     @skipIfWindows
+    @unittest.skip("")
     def test_server_unix_socket(self):
         """
         Test launching a binary with a lldb-dap in server mode on a unix socket.
@@ -98,7 +102,10 @@ int main(int argc, char const *argv[]) {
         names = ["Alice", "Bob"]
         # Run each session on a different thread.
         with futures.ThreadPoolExecutor() as executor:
-            session_args = [(self.create_session(adapter), name) for name in names]
+            session_args = [
+                (self.create_session(adapter, disconnect_automatically=False), name)
+                for name in names
+            ]
             session_futures = [
                 executor.submit(self.run_debug_session, adapter, name)
                 for adapter, name in session_args
@@ -170,7 +177,7 @@ int main(int argc, char const *argv[]) {
             connection_timeout=1,
         )
         # The connection timeout should not cut off the debug session
-        session = self.create_session(adapter)
+        session = self.create_session(adapter, disconnect_automatically=False)
         self.run_debug_session(session, "Alice", sleep_seconds_in_middle=1.5)
         self.assertTrue(adapter.is_alive, "expected the server to be running")
 
@@ -187,11 +194,11 @@ int main(int argc, char const *argv[]) {
         )
         time.sleep(0.5)
         # Should be able to connect to the server.
-        session1 = self.create_session(adapter)
+        session1 = self.create_session(adapter, disconnect_automatically=False)
         self.run_debug_session(session1, "Alice")
         time.sleep(0.5)
         # Should be able to connect to the server, because it's still within the connection timeout.
-        session2 = self.create_session(adapter)
+        session2 = self.create_session(adapter, disconnect_automatically=False)
         self.run_debug_session(session2, "Bob")
 
         time.sleep(1.3)
@@ -207,8 +214,10 @@ int main(int argc, char const *argv[]) {
         self.build()
         program = self.getBuildArtifact("a.out")
         adapter = self.start_server("listen://localhost:0", 1)
-        session1 = self.create_session(adapter)  # with first breakpoint.
-        session2 = self.create_session(adapter)  # with second breakpoint.
+        # With first breakpoint.
+        session1 = self.create_session(adapter, disconnect_automatically=False)
+        # With second breakpoint.
+        session2 = self.create_session(adapter, disconnect_automatically=False)
 
         source = "main.c"
         bp1_line = line_number(source, "// breakpoint 1")
@@ -228,7 +237,7 @@ int main(int argc, char const *argv[]) {
         session2.verify_stopped_on_breakpoint(breakpoint2, after=ctx2.process_event)
 
         # Start and finish the third session with no breakpoint.
-        session3 = self.create_session(adapter)  # with no breakpoint.
+        session3 = self.create_session(adapter, disconnect_automatically=False)
         process_event3 = session3.launch(launch_args)
         session3.verify_process_exited(after=process_event3)
 

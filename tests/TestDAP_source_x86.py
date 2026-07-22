@@ -5,8 +5,8 @@ Test lldb-dap stack trace containing x86 assembly
 from lldbsuite.test import lldbplatformutil
 from lldbsuite.test.decorators import skipUnlessArch, skipUnlessPlatform
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 class TestDAP_stacktrace_x86(DAPTestCaseBase):

@@ -3,8 +3,8 @@ Test lldb-dap setBreakpoints request in assembly source references.
 """
 
 from lldbsuite.test.decorators import skipIfWindows
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 class TestDAP_setBreakpointsAssembly(DAPTestCaseBase):
@@ -38,8 +38,6 @@ int main(int argc, char const *argv[]) {
             assembly_func_id, after=ctx.process_event
         )
 
-        thread_ctx = session.thread_context_from(stop_event)
-        top_frame = thread_ctx.top_frame().frame
         top_frame = session.top_frame_from(stop_event).frame
         source_reference = self.expect_not_none(
             top_frame.source and top_frame.source.sourceReference,
@@ -50,9 +48,7 @@ int main(int argc, char const *argv[]) {
         asm_bp_response = session.set_assembly_breakpoints(
             source_reference, [top_frame.line + 1]
         )
-        resp_breakpoints = asm_bp_response.body.breakpoints
-        self.assertEqual(len(resp_breakpoints), 1, "expects one breakpoint")
-        asm_bp_id = self.expect_not_none(resp_breakpoints[0].id)
+        [asm_bp_id] = session.breakpoints_to_ids(asm_bp_response.body.breakpoints)
         session.continue_to_breakpoint(asm_bp_id)
 
         # Continue again and verify it hits in the next function call.
@@ -74,9 +70,7 @@ int main(int argc, char const *argv[]) {
         # a source reference not created fails.
         for bad_ref in (-1, 200):
             response = session.set_assembly_breakpoints(bad_ref, [1])
-            breakpoints = response.body.breakpoints
-            self.assertEqual(len(breakpoints), 1)
-            bp = breakpoints[0]
+            [bp] = response.body.breakpoints
             self.assertFalse(bp.verified, "expected breakpoint to not be verified")
             self.assertEqual(bp.message, "Invalid sourceReference.")
 
@@ -94,20 +88,15 @@ int main(int argc, char const *argv[]) {
             function_bp_ids, after=ctx.process_event
         )
 
-        thread_ctx = session.thread_context_from(stop_event)
-        top_frame = thread_ctx.top_frame().frame
+        top_frame = session.top_frame_from(stop_event).frame
         source = self.expect_not_none(top_frame.source)
         source_reference = self.expect_not_none(source.sourceReference)
 
         persistent_breakpoint_line = 4
-        persistent_response = session.set_assembly_breakpoints(
+        response = session.set_assembly_breakpoints(
             source_reference, [persistent_breakpoint_line]
         )
-        persistent_bps = persistent_response.body.breakpoints
-        self.assertEqual(
-            len(persistent_bps), 1, "expected one assembly breakpoint to be set"
-        )
-        persistent_bp = persistent_bps[0]
+        [persistent_bp] = response.body.breakpoints
         persistent_source = self.expect_not_none(
             persistent_bp.source, "expected resolved breakpoint to carry a source"
         )
@@ -121,9 +110,7 @@ int main(int argc, char const *argv[]) {
             "expected adapterData to include persistenceData",
         )
 
-        session.continue_to_any_breakpoint(
-            [self.expect_not_none(bp.id) for bp in persistent_bps]
-        )
+        session.continue_to_breakpoint(self.expect_not_none(persistent_bp.id))
         session.disconnect(terminateDebuggee=True)
         session.stop()
 
@@ -134,18 +121,12 @@ int main(int argc, char const *argv[]) {
             response = session2.set_assembly_breakpoints(
                 persistent_source, [persistent_breakpoint_line]
             )
-            new_bp_ids = [
-                self.expect_not_none(bp.id) for bp in response.body.breakpoints
-            ]
-        self.assertEqual(
-            len(new_bp_ids), 1, "expected one breakpoint to be set in the new session2"
-        )
+            [new_bp_id] = session2.breakpoints_to_ids(response.body.breakpoints)
 
         stop_event = session2.verify_stopped_on_breakpoint(
-            new_bp_ids, after=ctx.process_event
+            new_bp_id, after=ctx.process_event
         )
-        thread_ctx = session2.thread_context_from(stop_event)
-        top_frame = thread_ctx.top_frame().frame
+        top_frame = session2.top_frame_from(stop_event).frame
         self.assertEqual(
             top_frame.line,
             persistent_breakpoint_line,

@@ -3,8 +3,8 @@ Test lldb-dap launch request.
 """
 
 import time
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldbsuite.test.tools.lldb_dap.dap_types import DisconnectArgs, InitializeArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import DisconnectArgs, InitializeArgs
 from lldbsuite.test.tools.lldb_dap.session import Session
 from lldbsuite.test.tools.lldb_dap.utils import DebugAdapter, DebugAdapterOptions
 

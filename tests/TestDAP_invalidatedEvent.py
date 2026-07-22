@@ -5,8 +5,8 @@ know about it.
 """
 
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs, StackTraceArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs, StackTraceArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 from lldbsuite.test.tools.lldb_dap.session_helpers import DAPTestSession
 
 OTHER_H = r"""
@@ -35,6 +35,10 @@ int main() {
 }
 """
 
+    def build(self, filename=None):
+        other_source = self.create_file(OTHER_H, "other.h")
+        super().build()
+
     def verify_top_frame_name(
         self, session: DAPTestSession, frame_name: str, thread_id: int
     ):
@@ -51,7 +55,7 @@ int main() {
         Test an invalidated event for the stack area.
         The event is sent when the command `thread return <expr>` is sent by the user.
         """
-        other_source = self.create_file(OTHER_H, "other.h")
+        other_source = self.getSourcePath("other.h")
         program = self.getBuildArtifact("a.out")
         session = self.build_and_create_session()
         with session.configure(LaunchArgs(program)) as ctx:
@@ -60,31 +64,28 @@ int main() {
 
         stopped_event = session.verify_stopped_on_breakpoint(after=ctx.process_event)
 
-        thread_id = self.expect_not_none(
-            stopped_event.body.threadId, "expected a thread id."
-        )
-        stack_response = self.verify_top_frame_name(session, "add", thread_id)
+        thread_ctx = session.thread_context_from(stopped_event)
+        top_frame = thread_ctx.top_frame()
+        self.assertRegex(top_frame.name, "add.*")
 
-        # run thread return
-        thread_command = "thread return 20"
-        session.evaluate(thread_command, context="repl")
+        last_event = session.last_event()
+        # Run thread return.
+        session.evaluate("thread return 20", context="repl")
 
-        # wait for the invalidated stack event.
-        invalid_event = session.wait_for_invalidated(after=stack_response)
+        # Wait for the invalidated stack event.
+        invalid_event = session.wait_for_invalidated_event(after=last_event)
         self.assertIsNotNone(invalid_event, "Expected an invalidated event.")
         event_body = invalid_event.body
         self.assertIsNotNone(event_body.areas)
         self.assertIn("stacks", event_body.areas or [])
         self.assertIsNotNone(event_body.threadId)
         self.assertEqual(
-            thread_id,
+            thread_ctx.thread_id,
             event_body.threadId,
-            f"Expected the event from thread {thread_id}.",
+            f"Expected the event from thread {thread_ctx.thread_id}.",
         )
 
-        # confirm we are back at the main frame.
-        thread_id = self.expect_not_none(
-            invalid_event.body.threadId, "expected a thread id."
-        )
-        self.verify_top_frame_name(session, "main", thread_id)
+        # Confirm we are back at the main frame.
+        top_frame = session.top_frame_from(invalid_event)
+        self.assertRegex(top_frame.name, "main.*")
         session.continue_to_exit()

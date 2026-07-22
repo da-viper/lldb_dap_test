@@ -9,13 +9,13 @@ import sys
 
 from lldbsuite.test.decorators import skipIfWindows, skipUnlessDarwin
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import (
+from lldbsuite.test.tools.lldb_dap.types import (
     CompileUnitsArgs,
     LaunchArgs,
     ModuleEvent,
     ModuleReason,
 )
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 class TestDAP_module(DAPTestCaseBase):
@@ -85,7 +85,6 @@ int main(int argc, char const *argv[]) {
             # This breakpoint will be resolved only when the libfoo module is loaded.
             breakpoints = session.set_function_breakpoints(["foo"]).body.breakpoints
             self.assertEqual(len(breakpoints), 1, "expect one breakpoint.")
-
             foo_bp_id = self.expect_not_none(breakpoints[0].id)
 
         session.verify_stopped_on_breakpoint(foo_bp_id, after=ctx.process_event)
@@ -103,7 +102,7 @@ int main(int argc, char const *argv[]) {
             program_module.symbolFilePath, "Make sure a.out.stripped has no debug info"
         )
         symbols_path = self.getBuildArtifact(symbol_basename)
-        modules_response = session.last_response()
+        event_before_mod_change = session.last_event()
         session.evaluate(
             f'''`target symbols add -s "{program}" "{symbols_path}"''', context="repl"
         )
@@ -111,7 +110,7 @@ int main(int argc, char const *argv[]) {
         # Make sure we got an update event for the program module when the
         # symbols got added.
         changed_event = session.verify_next_module_event(
-            ModuleReason.CHANGED, after=modules_response
+            ModuleReason.CHANGED, after=event_before_mod_change
         )
         changed_module = changed_event.body.module
         self.assertEqual(program_module.name, changed_module.name)
@@ -132,24 +131,29 @@ int main(int argc, char const *argv[]) {
         self.assertEqual(program, program_module.path)
         self.assertIsNotNone(program_module.addressRange)
 
-        # Collect all the module names we saw as events.
-        module_new_names = []
+        # Collect all the modules added before we changed the program module.
+        new_module_names = []
+        changed_module_names = []
 
-        def seen_program_changed_event(event: ModuleEvent):
+        def seen_module_changed_event(event: ModuleEvent):
             if event.body.reason == ModuleReason.NEW:
-                module_new_names.append(event.body.module.name)
+                new_module_names.append(event.body.module.name)
+            if event.body.reason == ModuleReason.CHANGED:
+                changed_module_names.append(event.body.module.name)
 
-            is_changed_event = event.seq == changed_event.seq
-            return is_changed_event
+            return event.seq == changed_event.seq
 
-        session.wait_for_module_event(
-            after=ctx.init_response, until=seen_program_changed_event
-        )
+        init_resp = ctx.init_response
+        session.wait_for_module_event(after=init_resp, until=seen_module_changed_event)
+
         # Make sure we got an event for every active module.
-        self.assertNotEqual(len(module_new_names), 0)
+        self.assertNotEqual(len(new_module_names), 0)
         for module in active_modules:
-            self.assertIn(module, module_new_names)
+            self.assertIn(module, new_module_names)
 
+        # Make sure we got an changed event for the program module when the symbols got added.
+        self.assertNotEqual(len(changed_module_names), 0)
+        self.assertIn(program_module.name, changed_module_names)
         session.continue_to_exit()
 
     @skipIfWindows

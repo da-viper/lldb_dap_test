@@ -4,8 +4,8 @@ Test lldb-dap stepInTargets request
 
 from lldbsuite.test.decorators import no_match, skipIf, skipif_darwin, skipif_linux
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs, StepInTargetsArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs, StepInTargetsArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 class TestDAP_stepInTargets(DAPTestCaseBase):
@@ -46,14 +46,12 @@ int main(int argc, char const *argv[]) {
         stop_event = session.verify_stopped_on_breakpoint(after=process_event)
 
         thread_ctxs = session.thread_context_from(stop_event)
-        top_frame = thread_ctxs.top_frame()
+        frame_id = thread_ctxs.top_frame().frame.id
 
         # Request all step in targets list and verify the response.
-        step_in_targets_response = session.send_request(
-            StepInTargetsArgs(top_frame.frame.id)
-        ).result()
-        self.assertEqual(step_in_targets_response.success, True, "expect success")
-        step_in_targets = step_in_targets_response.body.targets
+        step_args = StepInTargetsArgs(frame_id)
+        step_in_targets_resp = session.send_request(step_args).result("expect success")
+        step_in_targets = step_in_targets_resp.body.targets
 
         self.assertEqual(len(step_in_targets), 3, "expect 3 step in targets")
 
@@ -103,7 +101,7 @@ int main(int argc, char const *argv[]) {
     @skipIf(archs=["x86", "x86_64"])
     @skipif_linux()  # TODO remove (should work on linux)
     def test_supported_capability_other_archs(self):
-        program = self.create_test_program_with_name("main.cpp")
+        program = self.getBuildArtifact("a.out")
         source = self.getSourcePath("main.cpp")
         session = self.build_and_create_session()
         bp_lines = [line_number(source, "// set breakpoint here")]

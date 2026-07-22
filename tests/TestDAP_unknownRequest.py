@@ -5,8 +5,8 @@ Test lldb-dap unknown request.
 from dataclasses import dataclass
 from typing import Optional
 
-from lldbsuite.test.tools.lldb_dap.dap_types import EmptyBodyResponse, LaunchArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import EmptyBodyResponse, LaunchArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 @dataclass(frozen=True)
@@ -33,28 +33,26 @@ int main() {
 """
     IS_C = True
 
-    def test_no_arguments(self):
+    def test(self):
         session = self.build_and_create_session()
         program = self.getBuildArtifact("a.out")
         process_event = session.launch(LaunchArgs(program, stopOnEntry=True))
         session.verify_stopped_on_entry(after=process_event)
 
-        handle = session.send_request(UnknownArgs())
-        response = handle.error()
+        # Test without arguments.
+        unknown_args = UnknownArgs()
+        response = session.send_request(unknown_args).error()
         self.assertFalse(response.success)
-        self.assertEqual(response.body.error.format, "unknown request")
+        resp_body = self.expect_not_none(response.body)
+        resp_error = self.expect_not_none(resp_body.error)
+        self.assertEqual(resp_error.format, "unknown request")
 
-        session.continue_to_exit()
-
-    def test_with_arguments(self):
-        session = self.build_and_create_session()
-        program = self.getBuildArtifact("a.out")
-        process_event = session.launch(LaunchArgs(program, stopOnEntry=True))
-        session.verify_stopped_on_entry(after=process_event)
-
-        handle = session.send_request(UnknownArgs(foo="bar", id=42))
-        response = handle.error()
+        # Test with arguments.
+        unknown_args = UnknownArgs(foo="bar", id=42)
+        response = session.send_request(unknown_args).error()
         self.assertFalse(response.success)
-        self.assertEqual(response.body.error.format, "unknown request")
+        resp_body = self.expect_not_none(response.body)
+        resp_error = self.expect_not_none(resp_body.error)
+        self.assertEqual(resp_error.format, "unknown request")
 
         session.continue_to_exit()

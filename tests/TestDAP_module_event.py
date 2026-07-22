@@ -1,8 +1,8 @@
 import sys
 
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs, StoppedReason
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs, StoppedReason
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 OTHER_C = r"""
 extern int foo(int x) {
@@ -39,12 +39,10 @@ int main(int argc, char const *argv[]) {
 }
 """
 
-    def test_module_event(self):
-        # TODO: move this to build
+    def build(self, filename=None):
         other = self.create_file(OTHER_C, "other.c")
         shared_lib_name = "libother.so" if sys.platform == "linux" else "libother.dylib"
         program_path = self.create_file(self.TEST_PROGRAM, "main.cpp")
-        program = self.getBuildArtifact("a.out")
         self.run_command(
             [
                 "/usr/bin/clang",
@@ -65,26 +63,30 @@ int main(int argc, char const *argv[]) {
                 f"-Wl,-rpath,{self.test_dir}",
                 "-ldl",
                 "-o",
-                program,
+                self.getBuildArtifact("a.out"),
             ]
         )
-        session = self.create_session()
+
+    def test_module_event(self):
+        session = self.build_and_create_session()
+        program = self.getBuildArtifact("a.out")
 
         source = "main.cpp"
-        breakpoint1_line = line_number(source, "// breakpoint 1")
-        breakpoint2_line = line_number(source, "// breakpoint 2")
-        breakpoint3_line = line_number(source, "// breakpoint 3")
+        bp1_line = line_number(source, "// breakpoint 1")
+        bp2_line = line_number(source, "// breakpoint 2")
+        bp3_line = line_number(source, "// breakpoint 3")
 
         with session.configure(LaunchArgs(program=program)) as ctx:
-            session.resolve_source_breakpoints(
-                source, [breakpoint1_line, breakpoint2_line, breakpoint3_line]
+            [bp1, bp2, bp3] = session.resolve_source_breakpoints(
+                source, [bp1_line, bp2_line, bp3_line]
             )
-        process_event = ctx.process_event
-        # Wait for the breakpoint before dlopen
-        before_dlopen_event = session.verify_stopped_on_breakpoint(after=process_event)
+        # Wait for the breakpoint before dlopen.
+        before_dlopen_event = session.verify_stopped_on_breakpoint(
+            bp1, after=ctx.process_event
+        )
 
         # Continue to the second breakpoint, before the dlclose.
-        session.continue_to_next_stop(exp_reason=StoppedReason.BREAKPOINT)
+        session.continue_to_breakpoint(bp2)
 
         # Make sure we got a module event for libother.
         new_module_event = session.verify_next_module_event(after=before_dlopen_event)
@@ -93,7 +95,7 @@ int main(int argc, char const *argv[]) {
         self.assertIn("libother", new_module_event.body.module.name)
 
         # Continue to the third breakpoint, after the dlclose.
-        session.continue_to_next_stop(exp_reason=StoppedReason.BREAKPOINT)
+        session.continue_to_breakpoint(bp3)
 
         # Make sure we got a module event for libother.
         removed_module_event = session.verify_next_module_event(after=new_module_event)

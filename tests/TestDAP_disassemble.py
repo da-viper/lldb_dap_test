@@ -4,8 +4,8 @@ Test lldb-dap disassemble request
 
 from lldbsuite.test.decorators import skipIfWindows
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 class TestDAP_disassemble(DAPTestCaseBase):
@@ -44,33 +44,32 @@ int main(void) {
 
     @skipIfWindows
     def test_disassemble(self):
-        """
-        Tests the 'disassemble' request.
-        """
+        """Disassembly at the current PC returns the expected source line, and
+        clearing breakpoints doesn't change the instructions."""
+
         program = self.getBuildArtifact("a.out")
         session = self.build_and_create_session()
         source = self.getSourcePath("main.c")
-        bp_line_no = line_number(source, "// breakpoint 1")
-        with session.configure(LaunchArgs(program)) as ctx:
-            session.resolve_source_breakpoints(source, [bp_line_no])
-        stop_event = session.verify_stopped_on_breakpoint(after=ctx.process_event)
+        bp_line = line_number(source, "// breakpoint 1")
 
-        thread_ctx = session.thread_context_from(stop_event)
-        top_frame = thread_ctx.top_frame()
+        with session.configure(LaunchArgs(program)) as ctx:
+            session.resolve_source_breakpoints(source, [bp_line])
+        stop_event = session.verify_stopped_on_breakpoint(after=ctx.process_event)
+        top_frame = session.thread_context_from(stop_event).top_frame()
 
         insts_with_bp = top_frame.disassemble()
         pc_with_bp = insts_with_bp[0]
         self.assertIsNotNone(pc_with_bp.location, "Source location missing.")
-        self.assertEqual(pc_with_bp.line, bp_line_no, "Expects the same line number")
+        self.assertEqual(pc_with_bp.line, bp_line, "Expects the same line number")
         self.assertTrue(pc_with_bp.instruction, "Assembly instruction missing.")
 
-        no_bp = session.set_source_breakpoints(source, [])
-        self.assertEqual(len(no_bp.body.breakpoints), 0, "Expects no breakpoints.")
+        cleared = session.set_source_breakpoints(source, [])
+        self.assertEqual(len(cleared.body.breakpoints), 0, "Expects no breakpoints.")
 
         insts_no_bp = top_frame.disassemble()
         pc_no_bp = insts_no_bp[0]
         self.assertIsNotNone(pc_no_bp.location, "Source location missing.")
-        self.assertEqual(pc_no_bp.line, bp_line_no, "Expects the same line number")
+        self.assertEqual(pc_no_bp.line, bp_line, "Expects the same line number")
         self.assertTrue(pc_no_bp.instruction, "Assembly instruction missing.")
 
         # The disassembly instructions should be the same with breakpoint and
@@ -85,22 +84,20 @@ int main(void) {
 
     @skipIfWindows
     def test_disassemble_backwards(self):
-        """
-        Tests the 'disassemble' request with a backwards disassembly range.
-        """
+        """`disassemble` with a negative `instructionOffset` returns the
+        requested number of instructions, with the memoryReference at the
+        expected index in the middle of the returned window."""
         program = self.getBuildArtifact("a.out")
         session = self.build_and_create_session()
         source = self.getSourcePath("main.c")
+        bp_line = line_number(source, "// breakpoint 1")
         with session.configure(LaunchArgs(program)) as ctx:
-            session.resolve_source_breakpoints(
-                source, [line_number(source, "// breakpoint 1")]
-            )
+            session.resolve_source_breakpoints(source, [bp_line])
         stop_event = session.verify_stopped_on_breakpoint(after=ctx.process_event)
 
-        thread_ctx = session.thread_context_from(stop_event)
-        frames = thread_ctx.frames(levels=2)
+        caller_frame = session.thread_context_from(stop_event).frames(levels=2)[1]
         instruction_pointer_ref = self.expect_not_none(
-            frames[1].frame.instructionPointerReference
+            caller_frame.frame.instructionPointerReference
         )
 
         backwards_instructions = 200
@@ -128,23 +125,22 @@ int main(void) {
         self.assertEqual(
             frame_instruction_index,
             backwards_instructions,
-            f"requested instruction should be preceeded by {backwards_instructions} instructions. "
-            f"Actual index: {frame_instruction_index}",
+            f"requested instruction should be preceded by {backwards_instructions} "
+            f"instructions. Actual index: {frame_instruction_index}",
         )
 
         session.set_source_breakpoints(source, [])
         session.continue_to_exit()
 
     def test_disassemble_empty_memory_reference(self):
-        """
-        Tests the 'disassemble' request with empty memory reference.
-        """
+        """An empty `memoryReference` returns the requested count of invalid
+        placeholder instructions instead of erroring out."""
         program = self.getBuildArtifact("a.out")
         session = self.build_and_create_session()
         source = self.getSourcePath("main.c")
-        bp_line_no = line_number(source, "// breakpoint 1")
+        bp_line = line_number(source, "// breakpoint 1")
         with session.configure(LaunchArgs(program)) as ctx:
-            session.resolve_source_breakpoints(source, [bp_line_no])
+            session.resolve_source_breakpoints(source, [bp_line])
         session.verify_stopped_on_breakpoint(after=ctx.process_event)
 
         instructions = session.disassemble(

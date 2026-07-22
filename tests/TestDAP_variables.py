@@ -1,11 +1,8 @@
 """
 Test lldb-dap variables request
 """
-
-from __future__ import annotations
-
 import os
-from typing import Optional
+from typing import List, Optional
 
 from lldbsuite.test import lldbplatformutil
 from lldbsuite.test.decorators import (
@@ -15,17 +12,13 @@ from lldbsuite.test.decorators import (
     skipUnlessDarwin,
 )
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import (
+from lldbsuite.test.tools.lldb_dap.types import (
     EvaluateContext,
     LaunchArgs,
     VariablesArgs,
 )
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldbsuite.test.tools.lldb_dap.session_helpers import (
-    DAPTestSession,
-    ExpectEval,
-    ExpectVar,
-)
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.session_helpers import ExpectEval, ExpectVar
 
 
 def make_expected_buffer(start_idx, count, offset=0):
@@ -129,9 +122,7 @@ void test_unnamed_bitfields() {
 }
 """
 
-    _session: DAPTestSession
-
-    def darwin_dwarf_missing_obj(self, initCommands: Optional[list[str]]):
+    def build_dwarf(self):
         # Build with separate compilation so DWARF debug info lives in main.o.
         main_path = self.create_file(self.TEST_PROGRAM, "main.cpp")
         main_obj = self.getBuildArtifact("main.o")
@@ -139,8 +130,14 @@ void test_unnamed_bitfields() {
         self.run_command(["/usr/bin/clang++", "-g", "-c", main_path, "-o", main_obj])
         self.run_command(["/usr/bin/clang++", "-g", main_obj, "-o", program])
 
+    def darwin_dwarf_missing_obj(self, initCommands: Optional[List[str]]):
+        self.build_dwarf()
+        program = self.getBuildArtifact("a.out")
+        main_obj = self.getBuildArtifact("main.o")
         self.assertTrue(os.path.exists(main_obj))
-        # Delete main.o to force an error when reading variables.
+
+        # Delete the main.o file that contains the debug info so we force an
+        # error when we run to main and try to get variables.
         os.unlink(main_obj)
         self.assertTrue(os.path.exists(program), "executable must exist")
 
@@ -157,10 +154,8 @@ void test_unnamed_bitfields() {
         thread_id = self.expect_not_none(stop_event.body.threadId)
         frame = session.thread_context_from(thread_id).top_frame()
 
-        locals_scope = frame.locals.scope
-        error_response = session.send_request(
-            VariablesArgs(variablesReference=locals_scope.variablesReference)
-        ).error()
+        var_args = VariablesArgs(variablesReference=frame.locals.variablesReference)
+        error_response = session.send_request(var_args).error()
         error_body = self.expect_not_none(error_response.body)
         error_message = self.expect_not_none(error_body.error)
         self.assertEqual(
@@ -176,7 +171,6 @@ void test_unnamed_bitfields() {
         """Test the "scopes", "variables", "setVariable", and "evaluate" packets."""
         program = self.getBuildArtifact("a.out")
         session = self.build_and_create_session()
-        self._session = session
         source = "main.cpp"
         breakpoint1_line = line_number(source, "// breakpoint 1")
         breakpoint2_line = line_number(source, "// breakpoint 2")
@@ -191,8 +185,7 @@ void test_unnamed_bitfields() {
             )
 
         bp1, bp2, bp3 = breakpoint_ids
-        stop_event = session.verify_stopped_on_breakpoint(bp1, after=ctx.process_event
-        )
+        stop_event = session.verify_stopped_on_breakpoint(bp1, after=ctx.process_event)
         thread_id = self.expect_not_none(stop_event.body.threadId)
         frame = session.top_frame_from(thread_id)
         local_vars = session.get_variables(frame.locals.variablesReference)
@@ -397,7 +390,6 @@ void test_unnamed_bitfields() {
         packets, and that permanent expressions persist across resumes."""
         program = self.getBuildArtifact("a.out")
         session = self.build_and_create_session()
-        self._session = session
         source = "main.cpp"
 
         launch_args = LaunchArgs(
@@ -652,22 +644,22 @@ void test_unnamed_bitfields() {
         session.verify_variables(permanent_ref_children, expandable_children)
 
         # The frame's scopes should carry corresponding presentation hints.
-        scopes = frame.scopes()
+        scopes = [ctx.scope for ctx in frame.scopes()]
         scope_names = [scope.name for scope in scopes]
         self.assertIn("Locals", scope_names)
         self.assertIn("Registers", scope_names)
 
         for scope in scopes:
             if scope.name == "Locals":
-                self.assertEqual(scope.scope.presentationHint, "locals")
+                self.assertEqual(scope.presentationHint, "locals")
             if scope.name == "Registers":
-                self.assertEqual(scope.scope.presentationHint, "registers")
+                self.assertEqual(scope.presentationHint, "registers")
 
         # An invalid variablesReference should produce a clear error.
         for wrong_var_ref in (-6000, -1, 4000):
-            response = session.send_request(
-                VariablesArgs(variablesReference=wrong_var_ref)
-            ).error()
+            var_args = VariablesArgs(variablesReference=wrong_var_ref)
+            response = session.send_request(var_args).error()
+
             error_body = self.expect_not_none(response.body)
             error_msg = self.expect_not_none(error_body.error)
             self.assertTrue(
@@ -687,7 +679,6 @@ void test_unnamed_bitfields() {
         too many children at once."""
         program = self.getBuildArtifact("a.out")
         session = self.build_and_create_session()
-        self._session = session
         source = "main.cpp"
         breakpoint_line = line_number(source, "// breakpoint 4")
 
@@ -765,7 +756,6 @@ void test_unnamed_bitfields() {
         returned value as a local."""
         program = self.getBuildArtifact("a.out")
         session = self.build_and_create_session()
-        self._session = session
 
         return_name = "(Return Value)"
         expect_locals: dict[str, ExpectVar] = {
@@ -836,18 +826,13 @@ void test_unnamed_bitfields() {
             self.skipTest(f"unknown program counter name for architecture: {arch}")
 
         # Verify locals.
-        thread_ctx = session.thread_context_from(stop_event)
-        top_frame = thread_ctx.top_frame()
-        reg_sets = top_frame.registers.variables()
-        [gpr_reg_set] = [
-            reg for reg in reg_sets if reg.name == "General Purpose Registers"
-        ]
-        for reg in gpr_reg_set.children():
-            if reg.name == pc_name:
-                value = reg.value
-                self.assertTrue(value.startswith("0x"))
-                self.assertIn("a.out`main + ", value)
-                self.assertIn("at main.cpp:", value)
+        top_frame = session.top_frame_from(stop_event)
+        gpr_reg_set = top_frame.registers["General Purpose Registers"]
+        pc_reg = gpr_reg_set[pc_name].variable
+
+        self.assertTrue(pc_reg.value.startswith("0x"))
+        self.assertIn("a.out`main + ", pc_reg.value)
+        self.assertIn("at main.cpp:", pc_reg.value)
 
     @no_debug_info_test
     @skipUnlessDarwin
@@ -903,6 +888,55 @@ void test_unnamed_bitfields() {
         self.assertEqual(var_pt["y"].value, "22")
 
     @skipIfWindows
+    def test_variable_id_uniqueness_simple2(self):
+        """Simple regression test for variable ID uniqueness across frames.
+        Ensures variable IDs are not reused between different scopes/frames."""
+        program = self.getBuildArtifact("a.out")
+        session = self.build_and_create_session()
+        with session.configure(LaunchArgs(program)) as ctx:
+            source = "main.cpp"
+            bp_line = line_number(source, "// breakpoint 3")
+            [bp_id] = session.resolve_source_breakpoints(source, [bp_line])
+        stop_event = session.verify_stopped_on_breakpoint(
+            bp_id, after=ctx.process_event
+        )
+
+        thread_ctx = session.thread_context_from(stop_event)
+        frames = thread_ctx.frames()
+        self.assertGreaterEqual(len(frames), 2, "need at least 2 frames")
+
+        all_refs: set[int] = set()
+
+        for frame in frames[:3]:
+            for scope in frame.scopes():
+                scope_ref = scope.variablesReference
+                if scope_ref != 0:
+                    self.assertNotIn(
+                        scope_ref,
+                        all_refs,
+                        f"variable reference {scope_ref} was reused!",
+                    )
+                    all_refs.add(scope_ref)
+
+        self.assertGreater(len(all_refs), 0, "should have found variable references")
+
+        all_scope_refs = all_refs.copy()
+        for scope_ref in all_scope_refs:
+            resp = session.send_request(VariablesArgs(scope_ref)).result(
+                f"Failed to get variables for reference: {scope_ref}"
+            )
+            vars = resp.body.variables
+            for var in vars:
+                var_ref = var.variablesReference
+                if var_ref != 0:
+                    self.assertNotIn(
+                        var_ref,
+                        all_refs,
+                        f"variable reference {scope_ref} was reused!",
+                    )
+                    all_refs.add(var_ref)
+
+    @skipIfWindows
     def test_variable_id_uniqueness_simple(self):
         """Simple regression test for variable ID uniqueness across frames.
         Ensures variable IDs are not reused between different scopes/frames."""
@@ -912,7 +946,8 @@ void test_unnamed_bitfields() {
             source = "main.cpp"
             bp_line = line_number(source, "// breakpoint 3")
             [bp_id] = session.resolve_source_breakpoints(source, [bp_line])
-        stop_event = session.verify_stopped_on_breakpoint(bp_id, after=ctx.process_event
+        stop_event = session.verify_stopped_on_breakpoint(
+            bp_id, after=ctx.process_event
         )
 
         thread_ctx = session.thread_context_from(stop_event)
@@ -927,11 +962,11 @@ void test_unnamed_bitfields() {
 
             for scope in scopes:
                 ref = scope.variablesReference
-                if ref != 0:
-                    self.assertNotIn(
-                        ref, all_refs, f"Variable reference {ref} was reused!"
-                    )
-                    all_refs.add(ref)
+                if ref == 0:
+                    continue
+
+                self.assertNotIn(ref, all_refs, f"Variable reference {ref} was reused!")
+                all_refs.add(ref)
 
         self.assertGreater(len(all_refs), 0, "Should have found variable references")
         for ref in all_refs:

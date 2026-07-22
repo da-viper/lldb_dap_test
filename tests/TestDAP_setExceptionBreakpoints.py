@@ -8,8 +8,8 @@ from lldbsuite.test.decorators import (
     skipIfTargetDoesNotSupportSharedLibraries,
     skipIfWindows,
 )
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 @skipIfTargetDoesNotSupportSharedLibraries()
@@ -126,7 +126,9 @@ int main(int argc, char const *argv[]) {
             response = session.set_exception_breakpoints(
                 filters=["cpp_throw", "cpp_catch"]
             )
-            self.assertTrue(response.success)
+            breakpoints = self.expect_not_none(response.body.breakpoints)
+            for bp in breakpoints:
+                self.assertTrue(bp.verified, True)
 
         session.verify_stopped_on_exception(
             expected_description=r"breakpoint 1\.1",

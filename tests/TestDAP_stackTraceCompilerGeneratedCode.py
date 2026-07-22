@@ -5,11 +5,11 @@ Test lldb-dap stackTrace request for compiler generated code
 
 from lldbsuite.test.decorators import *
 from lldbsuite.test.lldbtest import *
-from lldbsuite.test.tools.lldb_dap import lldb_dap_testcase
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap import testcase
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs
 
 
-class TestDAP_stackTraceCompilerGeneratedCode(lldb_dap_testcase.DAPTestCaseBase):
+class TestDAP_stackTraceCompilerGeneratedCode(testcase.DAPTestCaseBase):
     TEST_PROGRAM = r"""void bar() {
   int val = 32; // breakpoint here
 }

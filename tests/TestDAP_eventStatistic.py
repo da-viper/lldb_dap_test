@@ -11,12 +11,12 @@ from lldbsuite.test.decorators import (
     skipIfTargetDoesNotSupportSharedLibraries,
     skipIfWindows,
 )
-from lldbsuite.test.tools.lldb_dap import lldb_dap_testcase
-from lldbsuite.test.tools.lldb_dap.dap_types import InitializedEvent, LaunchArgs
+from lldbsuite.test.tools.lldb_dap import testcase
+from lldbsuite.test.tools.lldb_dap.types import InitializedEvent, LaunchArgs
 
 
 @skipIfTargetDoesNotSupportSharedLibraries()
-class TestDAP_eventStatistic(lldb_dap_testcase.DAPTestCaseBase):
+class TestDAP_eventStatistic(testcase.DAPTestCaseBase):
     """
 
     Test case that captures both initialized and terminated events.
@@ -116,7 +116,7 @@ int main(int argc, char const *argv[]) {
         process_event = session.launch(LaunchArgs(program))
         session.verify_process_exited()
 
-        terminated_event = session.wait_for_terminated(after=process_event)
+        terminated_event = session.wait_for_terminated_event(after=process_event)
         terminated_body = self.expect_not_none(terminated_event.body)
         statistics = terminated_body.lldb_statistics
         self.check_statistics_summary(statistics)

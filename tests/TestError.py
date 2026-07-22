@@ -1,13 +1,13 @@
 from dataclasses import dataclass
 
-from lldbsuite.test.tools.lldb_dap.dap_types import (
+from lldbsuite.test.tools.lldb_dap.types import (
     ContinueArgs,
     ErrorResponse,
     LaunchArgs,
     StackTraceArgs,
     args_protocol,
 )
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 class TestErrorHandling(DAPTestCaseBase):
@@ -34,7 +34,7 @@ class TestErrorHandling(DAPTestCaseBase):
     def test_request_before_initialize(self):
         """Test that requests before initialize fail appropriately"""
         session = self.create_session()
-        handle = session.send_request(ContinueArgs())
+        handle = session.send_request(ContinueArgs(12345))
         response = handle.error()
         self.assertEqual(response.message, "notStopped")
 

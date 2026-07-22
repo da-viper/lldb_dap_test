@@ -2,8 +2,8 @@
 Test lldb-dap launch request.
 """
 
-from lldbsuite.test.tools.lldb_dap.dap_types import Console, LaunchArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import Console, LaunchArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 class TestDAP_launch_invalid_launch_commands_and_console(DAPTestCaseBase):
@@ -41,13 +41,12 @@ int main(int argc, char const *argv[], char const *envp[]) {
         session = self.create_session()
         session.initialize_sequence(session.initialize_args)
 
-        err_response = session.send_request(
-            LaunchArgs(
-                program=program,
-                launchCommands=["a b c"],
-                console=Console.INTEGRATED_TERMINAL,
-            )
-        ).error()
+        launch_args = LaunchArgs(
+            program=program,
+            launchCommands=["a b c"],
+            console=Console.INTEGRATED_TERMINAL,
+        )
+        err_response = session.send_request(launch_args).error()
         error_msg = self.expect_not_none(
             err_response.body and err_response.body.error,
             "expected an error message in the launch response",

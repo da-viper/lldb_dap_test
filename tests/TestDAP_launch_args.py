@@ -2,8 +2,8 @@
 Test lldb-dap launch request.
 """
 
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 class TestDAP_launch_args(DAPTestCaseBase):
@@ -42,13 +42,14 @@ int main(int argc, char const *argv[], char const *envp[]) {
         output = session.get_stdout()
         self.assertTrue(output and len(output) > 0, "expect program output")
         lines = output.splitlines()
-        # Skip the first argument that contains the program name
+        # Skip the first argument that contains the program name.
         lines.pop(0)
-        # Make sure arguments we specified are correct
-        for i, arg in enumerate(args):
-            quoted_arg = '"%s"' % (arg)
+        # Make sure arguments we specified are correct.
+        args_and_lines = zip(args, lines)
+        for i, (arg, line) in enumerate(args_and_lines, start=1):
+            quoted_arg = f'"{arg}"'
             self.assertIn(
                 quoted_arg,
-                lines[i],
-                'arg[%i] "%s" not in "%s"' % (i + 1, quoted_arg, lines[i]),
+                line,
+                f'arg[{i}] "{arg}" not in {line!r}',
             )

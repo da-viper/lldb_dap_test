@@ -1,4 +1,5 @@
 from __future__ import annotations
+from functools import wraps
 import gc
 import io
 import os
@@ -11,10 +12,10 @@ from subprocess import DEVNULL, PIPE, Popen
 import subprocess
 import sys
 import time
-from typing import Callable, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 import unittest
 
-from lldbsuite.test import configuration
+from lldbsuite.test import configuration, decorators
 from lldbsuite.test import lldbplatformutil
 
 
@@ -196,12 +197,7 @@ class Base(unittest.TestCase):
 
         # Set platform context.
         cls.platformContext = lldbplatformutil.createPlatformContext()
-
-        dap_path = str(Path.home() / "Dev/contribute/llvm-build/release/bin/lldb-dap")
-        if sys.platform == "darwin":
-            dap_path = "/Volumes/workspace/Dev/llvm-build/release/bin/lldb-dap"
-
-        cls.lldbDAPExec = os.getenv("DAP_ADAPTER_PATH", dap_path)
+        cls.lldbDAPExec = configuration.lldbDAPExec
 
     def setUp(self):
         super().setUp()
@@ -269,7 +265,7 @@ class Base(unittest.TestCase):
         return commands
 
     def getPlatform(self):
-        return sys.platform
+        return lldbplatformutil.getPlatform()
 
     def platformIsDarwin(self):
         """Returns true if the OS triple for the selected platform is any valid apple OS"""
@@ -291,6 +287,10 @@ class Base(unittest.TestCase):
     def getSourcePath(self, filename: str):
         return str(self._source_dir / filename)
 
+    def getSourceDir(self) -> str:
+        """Return the full path to the current test."""
+        return str(self._source_dir)
+
     def getArchitecture(self):
         return platform.machine()
 
@@ -309,16 +309,31 @@ class Base(unittest.TestCase):
         self.run_command(command)
 
     def run_command(self, command_args: list[str]):
-        result = subprocess.run(command_args, cwd=self.getSourcePath(""))
+        result = subprocess.run(
+            command_args, capture_output=True, cwd=self.getSourcePath("")
+        )
         if result.returncode != 0:
+            stderr = result.stderr.decode() if result.stderr else ""
+            stdout = result.stdout.decode() if result.stdout else ""
             args = " ".join(result.args)
-            raise Exception(f"{result}\n{args}")
 
-    def build(self, filename: Optional[str] = None):
+            raise Exception(f"{stderr}\n\tstdout:{stdout}\n\targs: {args}")
+
+    def build(self, dictionary: Optional[Dict[str, Any]] = None):
+        dictionary = dictionary or {}
+        default = {
+            "EXE": "a.out",
+            "filename": "main.c" if self.IS_C else "main.cpp",
+        }
+        for key, value in default.items():
+            dictionary.setdefault(key, value)
+
         assert self.TEST_PROGRAM is not None
-        opt_filename = "main.c" if self.IS_C else "main.cpp"
-        filename = filename or opt_filename
-        self.create_test_program_with_name(filename)
+        filename = dictionary["filename"]
+        exe = dictionary["EXE"]
+        self.create_and_compile_file(
+            self.TEST_PROGRAM, filename=filename, output_name=exe
+        )
 
     def run_platform_command(self, cmd: str):
         commands = shlex.split(cmd)
@@ -331,9 +346,11 @@ class Base(unittest.TestCase):
         file = self.create_file(self.TEST_PROGRAM, filename)
         return self.compile_program(file)
 
-    def create_and_compile_file(self, code: str, filename: str = "main.cpp"):
+    def create_and_compile_file(
+        self, code: str, filename: str = "main.cpp", output_name: str = "a.out"
+    ):
         file = self.create_file(code, filename)
-        return self.compile_program(file)
+        return self.compile_program(file, output_name=output_name)
 
     def create_file(self, code: str, filename: str) -> str:
         """Create a test program file"""
@@ -359,10 +376,225 @@ class Base(unittest.TestCase):
         commands = [compiler, "-g"]
         if extra_args is not None:
             commands.extend(extra_args)
-        commands.extend(["-o", output_path, filepath])
+        commands.extend([filepath, "-o", output_path])
 
         self.run_command(commands)
-        return str(self.test_dir / output_name)
+        return output_path
 
     def addTearDownHook(self, func: Callable):
         self.addCleanup(func)
+
+
+def _expand_test_variants(attrname, methods, variant, xfail_fns, skip_fns):
+    """Expand test methods in *methods* along the given *variant* dimension.
+
+    Only methods whose name equals *attrname* or starts with `attrname + "_"`
+    are expanded (this keeps methods from other `test*` functions untouched
+    when multiple test methods coexist in the same `newattrs` dict).
+
+    For each matching method and each enabled value in *variant*, a new
+    wrapper method is created with the value name appended
+    (`method_name + "_" + value_name`).  The wrapper delegates to the original
+    method, carries the variant attribute, and is optionally wrapped with
+    `unittest.expectedFailure` or `unittest.skip` based on predicates
+    found in *xfail_fns* / *skip_fns*.
+
+    Args:
+        attrname: The original test method name being processed by the
+            metaclass (e.g. `"test_foo"`).
+        methods: `dict[str, callable]` of accumulated methods (`newattrs`).
+        variant: The `TestVariant` to expand along.
+        xfail_fns: `__variant_xfail__` dict from the original test method.
+        skip_fns: `__variant_skip__` dict from the original test method.
+
+    Returns:
+        A new dict with the original matching methods replaced by their
+        per-value copies.  Non-matching entries are passed through.
+    """
+    no_reason = lambda *args, **kwargs: None
+    xfail_fn = xfail_fns.get(variant.name, no_reason)
+    skip_fn = skip_fns.get(variant.name, no_reason)
+    expanded = {}
+    for method_name, method in methods.items():
+        if not method_name.startswith("test"):
+            expanded[method_name] = method
+            continue
+        if method_name != attrname and not method_name.startswith(attrname + "_"):
+            expanded[method_name] = method
+            continue
+        for value_name in variant.get_enabled_values():
+            if _is_excluded_variant_combination(method, variant.name, value_name):
+                continue
+            new_name = method_name + "_" + value_name
+
+            @decorators.add_test_categories([value_name])
+            @wraps(method)
+            def variant_method(self, method=method):
+                return method(self)
+
+            variant_method.__name__ = new_name
+            setattr(variant_method, variant.name, value_name)
+
+            for attr in variant.attrs_to_preserve:
+                if hasattr(method, attr):
+                    setattr(variant_method, attr, getattr(method, attr))
+
+            xfail_reason = xfail_fn(**{variant.name: value_name})
+            if xfail_reason:
+                variant_method = unittest.expectedFailure(variant_method)
+
+            skip_reason = skip_fn(**{variant.name: value_name})
+            if skip_reason:
+                variant_method = unittest.skip(skip_reason)(variant_method)
+
+            expanded[new_name] = variant_method
+    return expanded
+
+
+_test_variants = []
+# Variant value combinations that should never be generated. Each entry maps
+# `variant_name -> value`; a method copy is dropped when its already-set
+# variant attributes plus the new value being added match every key in the
+# entry. Add entries here for crosses that don't exercise anything new and
+# would only inflate the matrix on remote test runs.
+_excluded_variant_combinations = [
+    # Example (uncomment + adapt when registering a real cross to drop):
+    # {"swift_module_importer": "noclang", "swift_embedded": "swiftembed"},
+]
+
+
+def _is_excluded_variant_combination(method, variant_name, value_name):
+    """Return True if assigning *variant_name=value_name* to *method* would
+    produce a combination listed in `_excluded_variant_combinations`."""
+    for combo in _excluded_variant_combinations:
+        if combo.get(variant_name) != value_name:
+            continue
+        if all(
+            getattr(method, k, None) == v for k, v in combo.items() if k != variant_name
+        ):
+            return True
+    return False
+
+
+class LLDBTestCaseFactory(type):
+    def __new__(cls, name, bases, attrs):
+        original_testcase = super(LLDBTestCaseFactory, cls).__new__(
+            cls, name, bases, attrs
+        )
+
+        # Check if any test methods need variant expansion
+        has_variant_tests = any(
+            attrname.startswith("test")
+            and any(v.should_expand(attrvalue) for v in _test_variants)
+            for attrname, attrvalue in attrs.items()
+        )
+
+        if (
+            hasattr(original_testcase, "NO_DEBUG_INFO_TESTCASE")
+            and original_testcase.NO_DEBUG_INFO_TESTCASE  # type: ignore
+            and not has_variant_tests
+        ):
+            return original_testcase
+
+        # Default implementation for skip/xfail reason based on the debug category,
+        # where "None" means to run the test as usual.
+        def no_reason(*args, **kwargs):
+            return None
+
+        debug_info_categories = {
+            "dwarf": True,
+            "dwo": True,
+            "dsym": True,
+            "pdb": False,
+            "gmodules": False,
+        }
+
+        newattrs = {}
+        for attrname, attrvalue in attrs.items():
+            if attrname.startswith("test") and not getattr(
+                attrvalue, "__no_debug_info_test__", False
+            ):
+                # Track only the entries created by THIS attrname so that
+                # variant expansion doesn't accidentally double-expand entries
+                # from a sibling test method whose name happens to be a strict
+                # prefix of attrname (e.g. test_foo vs test_foo_bar).
+                this_attr_entries = {}
+                # Create debug info variants unless NO_DEBUG_INFO_TESTCASE
+                if not original_testcase.NO_DEBUG_INFO_TESTCASE:  # type: ignore
+                    # If any debug info categories were explicitly tagged, assume that list to be
+                    # authoritative.  If none were specified, try with all debug info formats.
+                    test_method_categories = set(getattr(attrvalue, "categories", []))
+                    all_dbginfo_categories = set(debug_info_categories.keys())
+                    dbginfo_categories = test_method_categories & all_dbginfo_categories
+                    other_categories = list(
+                        test_method_categories - all_dbginfo_categories
+                    )
+                    if not dbginfo_categories:
+                        dbginfo_categories = {
+                            category
+                            for category, enabled in debug_info_categories.items()
+                            if enabled
+                        }
+
+                    # PDB is off by default, because it has a lot of failures right now.
+                    # See llvm.org/pr149498
+                    if original_testcase.TEST_WITH_PDB_DEBUG_INFO:  # type: ignore
+                        dbginfo_categories.add("pdb")
+
+                    xfail_fns = getattr(attrvalue, "__variant_xfail__", {})
+                    skip_fns = getattr(attrvalue, "__variant_skip__", {})
+                    xfail_for_debug_info_cat_fn = xfail_fns.get("debug_info", no_reason)
+                    skip_for_debug_info_cat_fn = skip_fns.get("debug_info", no_reason)
+                    for cat in dbginfo_categories:
+
+                        @decorators.add_test_categories([cat])
+                        @wraps(attrvalue)
+                        def test_method(self, attrvalue=attrvalue):
+                            return attrvalue(self)
+
+                        method_name = attrname + "_" + cat
+                        test_method.__name__ = method_name
+                        test_method.debug_info = cat  # type: ignore
+                        test_method.categories = other_categories + [cat]  # type: ignore
+
+                        xfail_reason = xfail_for_debug_info_cat_fn(debug_info=cat)
+                        if xfail_reason:
+                            test_method = unittest.expectedFailure(test_method)
+
+                        skip_reason = skip_for_debug_info_cat_fn(debug_info=cat)
+                        if skip_reason:
+                            test_method = unittest.skip(skip_reason)(test_method)
+
+                        this_attr_entries[method_name] = test_method
+                else:
+                    # NO_DEBUG_INFO_TESTCASE — put method in this_attr_entries
+                    # for variant expansion.
+                    this_attr_entries[attrname] = attrvalue
+
+                # Expand test variants only on the entries we just created
+                # for this attrname, not on the whole newattrs dict (which
+                # would double-expand sibling methods whose names share a
+                # prefix).
+                for variant in _test_variants:
+                    if variant.should_expand(attrvalue):
+                        xfail_fns = getattr(attrvalue, "__variant_xfail__", {})
+                        skip_fns = getattr(attrvalue, "__variant_skip__", {})
+                        this_attr_entries = _expand_test_variants(
+                            attrname,
+                            this_attr_entries,
+                            variant,
+                            xfail_fns=xfail_fns,
+                            skip_fns=skip_fns,
+                        )
+
+                # Merge this attrname's variant-expanded entries into
+                # newattrs.
+                newattrs.update(this_attr_entries)
+
+            else:
+                newattrs[attrname] = attrvalue
+
+        if original_testcase.TEST_WITH_PDB_DEBUG_INFO:  # type: ignore
+            newattrs["SHARED_BUILD_TESTCASE"] = False
+
+        return super(LLDBTestCaseFactory, cls).__new__(cls, name, bases, newattrs)

@@ -1,7 +1,7 @@
-from lldbsuite.test.decorators import expectedFailureAll, skipif_darwin
+from lldbsuite.test.decorators import expectedFailureAll, skipIfDarwin
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 class TestDAP_variables_children(DAPTestCaseBase):
@@ -80,14 +80,14 @@ def __lldb_init_module(debugger, dict):
         """Test that GetNumChildren is not called for formatters not producing indexed children."""
         session = self.build_and_create_session()
         program = self.getBuildArtifact("a.out")
-        with session.configure(
-            LaunchArgs(
-                program,
-                preRunCommands=[
-                    "command script import '%s'" % self.getSourcePath("formatter.py")
-                ],
-            )
-        ) as ctx:
+
+        launch_args = LaunchArgs(
+            program,
+            preRunCommands=[
+                f"command script import '{self.getSourcePath('formatter.py')}'"
+            ],
+        )
+        with session.configure(launch_args) as ctx:
             source = self.getSourcePath("main.cpp")
             breakpoint_line = line_number(source, "// break here")
             session.resolve_source_breakpoints(source, [breakpoint_line])
@@ -108,7 +108,7 @@ def __lldb_init_module(debugger, dict):
         self.assertIn("['Indexed']", resp_body.result)
 
     @expectedFailureAll(archs=["arm$", "arm64", "aarch64"])
-    @skipif_darwin()
+    @skipIfDarwin
     def test_return_variable_with_children(self):
         """
         Test the stepping out of a function with return value show the children correctly
@@ -118,32 +118,24 @@ def __lldb_init_module(debugger, dict):
 
         with session.configure(LaunchArgs(program)) as ctx:
             function_name = "test_return_variable_with_children"
-            breakpoint_ids = session.resolve_function_breakpoints([function_name])
-            self.assertEqual(len(breakpoint_ids), 1)
+            [func_bp_id] = session.resolve_function_breakpoints([function_name])
 
-        stopped_event = session.wait_until_any_breakpoint_hit(
-            breakpoint_ids, after=ctx.process_event
+        stopped_event = session.verify_stopped_on_breakpoint(
+            func_bp_id, after=ctx.process_event
         )
 
-        thread_id = self.expect_not_none(
-            stopped_event.body.threadId,
-            f"no thread id for stopped event {stopped_event}",
-        )
-        self.assertEqual(stopped_event.body.reason, "breakpoint")
+        thread_ctx = session.thread_context_from(stopped_event)
+        thread_ctx.step_out()
 
-        thread = session.thread_context_from(thread_id)
-        thread.step_out()
-        local_variables = thread.top_frame().locals.variables()
+        local_variables = thread_ctx.top_frame().locals.variables()
         self.assertIsNot(len(local_variables), 0)
-        return_variable = local_variables[0]
+        return_variable = local_variables[0].variable
         self.assertEqual(return_variable.name, "(Return Value)")
 
         result_var_ref = return_variable.variablesReference
         self.assertIsNot(result_var_ref, None, "There is no result value")
 
         result_children = session.get_variables(result_var_ref)
-        self.assertTrue(result_children, "The result does not have children")
-
         verify_children = {"buffer": '"hello world!"', "x": "10", "y": "20"}
         for child in result_children:
             verify_value = verify_children.get(child.name)

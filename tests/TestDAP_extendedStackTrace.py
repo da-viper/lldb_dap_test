@@ -7,8 +7,8 @@ import os
 from lldbsuite.test.decorators import skipUnlessDarwin
 from lldbsuite.test.lldbplatformutil import findBacktraceRecordingDylib
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs, StackFrameFormat
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs, StackFrameFormat
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase
 
 
 class TestDAP_extendedStackTrace(DAPTestCaseBase):
@@ -42,20 +42,10 @@ int main(int argc, char *argv[]) {
   dispatch_main();
 }
 """
+    IS_C = True
 
-    def build(self, filename=None):
-        # TEST_PROGRAM is Objective-C, not C/C++, so we can't use the base
-        # build() which defaults to main.c / main.cpp + clang/clang++.
-        program_path = self.create_file(self.TEST_PROGRAM, "main.m")
-        self.run_command(
-            [
-                "/usr/bin/clang",
-                "-g",
-                program_path,
-                "-o",
-                self.getBuildArtifact("a.out"),
-            ]
-        )
+    def build(self, dictionary=None):
+        super().build({"filename": "main.m"})
 
     def build_and_run(self, *, displayExtendedBacktrace: bool = True):
         backtrace_recording_lib = findBacktraceRecordingDylib()

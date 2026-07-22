@@ -1,15 +1,21 @@
 """
-Test lldb-dap setBreakpoints request
+Test lldb-dap debug console output.
 """
 
+import importlib.util
 import os
-import platform
+import unittest
 
 from lldbsuite.test.decorators import skipIfWindows
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.lldb_dap.dap_types import LaunchArgs
-from lldbsuite.test.tools.lldb_dap.lldb_dap_testcase import DAPTestCaseBase
-from lldbsuite.test.tools.lldb_dap.session_helpers import ExpectEval
+from lldbsuite.test.tools.lldb_dap.types import LaunchArgs
+from lldbsuite.test.tools.lldb_dap import DAPTestCaseBase, DAPTestSession
+
+
+skipIfNoPsutil = unittest.skipUnless(
+    importlib.util.find_spec("psutil") is not None,
+    "psutil not installed, please install using 'pip install psutil'.",
+)
 
 
 def get_subprocess(root_process, process_name: str):
@@ -24,8 +30,6 @@ def get_subprocess(root_process, process_name: str):
 
 
 class TestDAP_console(DAPTestCaseBase):
-    USE_DEFAULT_DEBUG_ADAPTER = False
-
     TEST_PROGRAM = r"""
 int multiply(int x, int y) {
   return x * y; // breakpoint 1
@@ -65,34 +69,23 @@ Streams:
 
 """
 
-    def setUp(self):
-        super().setUp()
-        adapter = self.create_stdio_debug_adapter()
-        self._session = self.build_and_create_session(adapter)
-
-    def build(self, filename=None):
-        self.create_test_program_with_name("main.cpp")
+    def build(self, dictionary=None):
+        super().build(dictionary)
         self.create_file(self.MINI_DUMP_YAML, "minidump.yaml")
 
     def check_lldb_command(
         self,
+        session: DAPTestSession,
         lldb_command: str,
-        contains_string: str,
-        assert_msg: str,
-        command_escape_prefix: str = "`",
+        contains: str,
+        escape_prefix: str = "`",
     ):
-        response = self._session.evaluate(
-            f"{command_escape_prefix}{lldb_command}", context="repl"
-        )
-        output = response.result
+        """Evaluate an LLDB command via the repl and assert its output contains `contains`."""
+        resp_body = session.evaluate(f"{escape_prefix}{lldb_command}", context="repl")
         self.assertIn(
-            contains_string,
-            output,
-            (
-                """Verify %s by checking the command output:\n"""
-                """'''\n%s'''\nfor the string: "%s" """
-                % (assert_msg, output, contains_string)
-            ),
+            contains,
+            resp_body.result,
+            f"expected {contains!r} in output of `{lldb_command}`:\n{resp_body.result}",
         )
 
     def test_scopes_variables_setVariable_evaluate(self):
@@ -109,16 +102,15 @@ Streams:
         evaluated and the lldb commands that start with the backtick
         character.
         """
-        session = self._session
+        session = self.build_and_create_session()
         program = self.getBuildArtifact("a.out")
         source = "main.cpp"
-        # Set breakpoint in the thread function so we can step the threads
         breakpoint1_line = line_number(source, "// breakpoint 1")
-        lines = [breakpoint1_line]
         with session.configure(LaunchArgs(program)) as ctx:
-            bp_ids = session.resolve_source_breakpoints(source, lines)
-        process_event = ctx.process_event
-        stop_event = session.verify_stopped_on_breakpoint(bp_ids, after=process_event)
+            bp_ids = session.resolve_source_breakpoints(source, [breakpoint1_line])
+        stop_event = session.verify_stopped_on_breakpoint(
+            bp_ids, after=ctx.process_event
+        )
 
         # Cause a "scopes" to be sent for frame zero which should update the
         # selected thread and frame to frame 0.
@@ -129,87 +121,67 @@ Streams:
         # Verify frame #0 is selected in the command interpreter by running
         # the "frame select" command with no frame index which will print the
         # currently selected frame.
-        self.check_lldb_command("frame select", "frame #0", "frame 0 is selected")
+        self.check_lldb_command(session, "frame select", "frame #0")
 
         # Cause a "scopes" to be sent for frame one which should update the
         # selected thread and frame to frame 1.
         frame_ctxs[1].locals.variables()
+        self.check_lldb_command(session, "frame select", "frame #1")
 
-        # Verify frame #1 is selected in the command interpreter by running
-        # the "frame select" command with no frame index which will print the
-        # currently selected frame.
-        self.check_lldb_command("frame select", "frame #1", "frame 1 is selected")
+        session.continue_to_exit()
 
+    def do_test_with_escape_prefix(self, escape_prefix: str):
+        """Launch with the given `commandEscapePrefix`, stop on the breakpoint,
+        run `help` via that prefix, and exit."""
+        session = self.build_and_create_session()
+        program = self.getBuildArtifact("a.out")
+        source = "main.cpp"
+        breakpoint1_line = line_number(source, "// breakpoint 1")
+
+        launch_args = LaunchArgs(program, commandEscapePrefix=escape_prefix)
+        with session.configure(launch_args) as ctx:
+            bp_ids = session.resolve_source_breakpoints(source, [breakpoint1_line])
+        session.verify_stopped_on_breakpoint(bp_ids, after=ctx.process_event)
+
+        self.check_lldb_command(
+            session,
+            "help",
+            "For more information on any command",
+            escape_prefix=escape_prefix,
+        )
         session.continue_to_exit()
 
     def test_custom_escape_prefix(self):
-        session = self._session
-        program = self.getBuildArtifact("a.out")
-        with session.configure(LaunchArgs(program, commandEscapePrefix="::")) as ctx:
-            source = "main.cpp"
-            breakpoint1_line = line_number(source, "// breakpoint 1")
-            bp_ids = session.resolve_source_breakpoints(source, [breakpoint1_line])
-
-        process_event = ctx.process_event
-        session.verify_stopped_on_breakpoint(bp_ids, after=process_event)
-
-        self.check_lldb_command(
-            "help",
-            "For more information on any command",
-            "Help can be invoked",
-            command_escape_prefix="::",
-        )
-        session.continue_to_exit()
+        self.do_test_with_escape_prefix("::")
 
     def test_empty_escape_prefix(self):
-        session = self._session
-        program = self.getBuildArtifact("a.out")
-        source = "main.cpp"
-        breakpoint1_line = line_number(source, "// breakpoint 1")
-        with session.configure(LaunchArgs(program, commandEscapePrefix="")) as ctx:
-            breakpoint_ids = session.resolve_source_breakpoints(
-                source, [breakpoint1_line]
-            )
-        process_event = ctx.process_event
-        session.verify_stopped_on_breakpoint(breakpoint_ids, after=process_event)
-
-        self.check_lldb_command(
-            "help",
-            "For more information on any command",
-            "Help can be invoked",
-            command_escape_prefix="",
-        )
-        session.continue_to_exit()
+        self.do_test_with_escape_prefix("")
 
     @skipIfWindows
+    @skipIfNoPsutil
     def test_exit_status_message_sigterm(self):
+        import psutil
+
+        debug_server_path = self.get_debug_server_path()
+        if debug_server_path is None:
+            self.skipTest(f"{self.getPlatform()!r} does not have a debug server.")
+
+        session = self.build_and_create_session()
         source = "main.cpp"
-        session = self._session
         program = self.getBuildArtifact("a.out")
         breakpoint1_line = line_number(source, "// breakpoint 1")
         with session.configure(LaunchArgs(program, commandEscapePrefix="")) as ctx:
             breakpoint_ids = session.resolve_source_breakpoints(
                 source, [breakpoint1_line]
             )
-        process_event = ctx.process_event
+
         stop_event = session.verify_stopped_on_breakpoint(
-            breakpoint_ids, after=process_event
+            breakpoint_ids, after=ctx.process_event
         )
 
         # Kill lldb-server process.
-        process_name = (
-            "debugserver" if platform.system() in ["Darwin"] else "lldb-server"
-        )
-
-        try:
-            import psutil
-        except ImportError:
-            self.skipTest(
-                "psutil not installed, please install using 'pip install psutil'. "
-                "Skipping test_exit_status_message_sigterm test."
-            )
-
-        process = get_subprocess(psutil.Process(os.getpid()), process_name)
+        debug_server_name = debug_server_path.stem
+        process = get_subprocess(psutil.Process(os.getpid()), debug_server_name)
         process.terminate()
         process.wait()
 
@@ -220,18 +192,17 @@ Streams:
         self.assertRegex(
             captured.seen_texts,
             ".*exited with status = -1 .* died with signal SIGTERM.*",
-            "Exit status does not contain message 'exited with status'",
+            "exit status does not contain message 'exited with status'",
         )
 
     def test_exit_status_message_ok(self):
+        session = self.build_and_create_session()
         program = self.getBuildArtifact("a.out")
-        process_event = self._session.launch(
-            LaunchArgs(program, commandEscapePrefix="")
-        )
-        self._session.verify_process_exited()
+        process_event = session.launch(LaunchArgs(program, commandEscapePrefix=""))
+        session.verify_process_exited()
 
         # Get the console output
-        captured = self._session.collect_console(
+        captured = session.collect_console(
             after=process_event, until="exited with status"
         )
 
@@ -239,18 +210,18 @@ Streams:
         self.assertIn(
             "exited with status = 0 (0x00000000)",
             captured.seen_texts,
-            "Exit status does not contain message 'exited with status'",
+            "exit status does not contain message 'exited with status'",
         )
 
-    def test_diagnositcs(self):
-        session = self._session
+    def test_diagnostics(self):
+        session = self.build_and_create_session()
         program = self.getBuildArtifact("a.out")
         process_event = session.launch(LaunchArgs(program, stopOnEntry=True))
         stop_event = session.verify_stopped_on_entry(after=process_event)
 
         core = self.getBuildArtifact("minidump.core")
         self.yaml2obj("minidump.yaml", core)
-        session.evaluate(f"target create --core  {core}", context="repl")
+        session.evaluate(f"target create --core {core}", context="repl")
 
         captured = session.collect_important(after=stop_event, until="minidump file")
 
